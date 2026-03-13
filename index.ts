@@ -3454,7 +3454,7 @@ loadDash();
 */
 
 // Copiar todo el JS de bloque4.ts entre estas dos líneas
-</script>
+${'</'}script>
 </body>
 </html>`;
 
