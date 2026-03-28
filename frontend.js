@@ -870,6 +870,7 @@ async function loadGastosExt() {
           <div style="margin-top:14px;display:flex;gap:9px;flex-wrap:wrap">
             <button class="btn btn-o btn-sm" onclick="crearVotPresupuesto(${g.id},'${g.titulo.replace(/'/g,"\\'")}')">🗳️ Crear votación</button>
             <button class="detalle-btn" onclick="editarGextById(${g.id})">✏️ Editar gasto</button>
+            <button class="btn btn-r btn-sm" onclick="borrarGext(${g.id},'${g.titulo.replace(/'/g,"\\'")}')">🗑️ Eliminar</button>
           </div>` : ''}
       </div>`;
   }).join('');
@@ -934,6 +935,19 @@ async function guardarGastoExt() {
     closeModal('modal-nuevo-gext');
     loadGastosExt();
     showToast(editId ? '✓ Gasto actualizado' : '✓ Gasto extraordinario creado');
+  }
+}
+
+async function borrarGext(id, titulo) {
+  if (!confirm(`¿Eliminar el gasto extraordinario "${titulo}"?\n\nSe eliminarán también los presupuestos asociados. Esta acción no se puede deshacer.`)) return;
+  const r = await api(`/api/gastos-ext/${id}`, { method: 'DELETE' });
+  if (r.ok) {
+    _gextCache = [];
+    loadGastosExt();
+    loadDash();
+    showToast('🗑️ Gasto extraordinario eliminado');
+  } else {
+    showToast('Error al eliminar', false);
   }
 }
 

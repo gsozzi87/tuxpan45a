@@ -1116,6 +1116,19 @@ app.put("/api/gastos-ext/:id", requireAdmin, async (c) => {
   return c.json({ ok: true });
 });
 
+// ── Eliminar gasto extraordinario ──
+app.delete("/api/gastos-ext/:id", requireAdmin, (c) => {
+  const id = Number(c.req.param("id"));
+  // Borrar presupuestos asociados (archivos)
+  const presups = db.query("SELECT archivo_path FROM presupuestos WHERE gasto_ext_id=?").all(id) as any[];
+  presups.forEach((p: any) => {
+    if (p.archivo_path) try { require("fs").unlinkSync(p.archivo_path.replace("/uploads/", `${UPLOAD_DIR}/`)); } catch {}
+  });
+  db.run("DELETE FROM presupuestos WHERE gasto_ext_id=?", [id]);
+  db.run("DELETE FROM gastos_extraordinarios WHERE id=?", [id]);
+  return c.json({ ok: true });
+});
+
 // ── Presupuestos para gastos extraordinarios ──
 app.post("/api/gastos-ext/:id/presupuestos", async (c) => {
   const gasto_ext_id = Number(c.req.param("id"));
