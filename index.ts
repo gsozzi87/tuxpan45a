@@ -708,16 +708,38 @@ app.get("/api/pagos/resumen", (c) => {
   const ahorro_mes = recaudado - total_egresos;
   const cobertura_fijos = gastos_fijos > 0 ? Math.round((recaudado / gastos_fijos) * 100) : 100;
 
-  // Caja chica (saldo acumulado manual + ahorro del mes)
-  const caja = db.query("SELECT * FROM caja_chica WHERE mes=? AND anio=?").get(mes, anio) as any;
-  const saldo_inicial  = caja?.saldo_inicial  ?? 0;
-  const deposito_extra = caja?.deposito_extra ?? 0;
+  // Caja chica acumulativa: suma todos los ahorros desde el inicio hasta el mes pedido
+  // Para cada mes anterior: recaudado − (gastos + misc + abonos_fijos)
+  const allMeses: {mes:number,anio:number}[] = [];
+  // Generar lista de meses desde Mar 2026 hasta el mes pedido
+  let mm = 3, aa = 2026;
+  while (aa < anio || (aa === anio && mm <= mes)) {
+    allMeses.push({mes:mm,anio:aa});
+    mm++; if (mm > 12) { mm = 1; aa++; }
+  }
+  let saldo_acumulado = 0;
+  for (const {mes:m, anio:a} of allMeses) {
+    const rMes = db.query("SELECT * FROM condominios WHERE activo=1").all() as any[];
+    const totalCuota = rMes.reduce((s:number,co:any)=>s+co.cuota_mensual,0);
+    let recMes = 0;
+    rMes.forEach((co:any)=>{
+      const p = db.query("SELECT monto FROM pagos WHERE condominio_id=? AND mes=? AND anio=? AND tipo_pago='ordinario'").get(co.id,m,a) as any;
+      if(p) recMes += p.monto;
+    });
+    const gMes   = (db.query("SELECT COALESCE(SUM(monto),0) as t FROM gastos WHERE mes=? AND anio=?").get(m,a) as any)?.t ?? 0;
+    const miMes  = (db.query("SELECT COALESCE(SUM(monto),0) as t FROM gastos_misc WHERE mes=? AND anio=?").get(m,a) as any)?.t ?? 0;
+    const abMes  = (db.query("SELECT COALESCE(SUM(monto),0) as t FROM gastos_pagos WHERE mes=? AND anio=?").get(m,a) as any)?.t ?? 0;
+    const ccMes  = db.query("SELECT * FROM caja_chica WHERE mes=? AND anio=?").get(m,a) as any;
+    saldo_acumulado += (ccMes?.deposito_extra ?? 0) + recMes - gMes - miMes - abMes;
+  }
+  const deposito_extra = 0; // mantenido por compatibilidad
+  const saldo_inicial  = 0;
   // Aportes de caja chica ya comprometidos a gastos extraordinarios activos
   const aportes_comprometidos = (db.query(
     "SELECT SUM(aporte_caja) as t FROM gastos_extraordinarios WHERE estado='activo'"
   ).get() as any)?.t ?? 0;
-  const saldo_caja = saldo_inicial + deposito_extra + ahorro_mes - aportes_comprometidos;
-  const saldo_caja_bruto = saldo_inicial + deposito_extra + ahorro_mes;
+  const saldo_caja = saldo_acumulado - aportes_comprometidos;
+  const saldo_caja_bruto = saldo_acumulado;
 
   // Gastos extraordinarios activos
   const gex = db.query("SELECT * FROM gastos_extraordinarios WHERE estado='activo'").all() as any[];
@@ -1890,13 +1912,29 @@ html{color-scheme:light}
 
     <!-- DASHBOARD -->
     <div class='page active' id='page-dashboard'>
+      <!-- Selector de mes -->
+      <div style='display:flex;gap:10px;align-items:center;margin-bottom:18px;flex-wrap:wrap'>
+        <select class='fs' id='dash-mes' style='width:130px' onchange='loadDash()'>
+          <option value='1'>Enero</option><option value='2'>Febrero</option>
+          <option value='3'>Marzo</option><option value='4'>Abril</option>
+          <option value='5'>Mayo</option><option value='6'>Junio</option>
+          <option value='7'>Julio</option><option value='8'>Agosto</option>
+          <option value='9'>Septiembre</option><option value='10'>Octubre</option>
+          <option value='11'>Noviembre</option><option value='12'>Diciembre</option>
+        </select>
+        <select class='fs' id='dash-anio' style='width:90px' onchange='loadDash()'>
+          <option value='2026' selected>2026</option>
+          <option value='2027'>2027</option>
+        </select>
+        <span id='dash-fecha-lbl' style='font-size:13px;color:var(--text3)'></span>
+      </div>
       <!-- Fila 1: stats clave -->
       <div class='g4' style='margin-bottom:16px' id='dash-stats'></div>
       <!-- Fila 2: adeudos -->
       <div class='g2' style='margin-bottom:16px;align-items:start' id='dash-adeudos'></div>
       <!-- Fila 3: recaudación + avisos -->
       <div class='g2' style='align-items:start'>
-        <div class='card'><div class='ctitle'>Recaudación del mes</div><div id='dash-prog'></div></div>
+        <div class='card'><div class='ctitle' id='dash-prog-titulo'>Recaudación del mes</div><div id='dash-prog'></div></div>
         <div class='card'><div class='ctitle'>📢 Últimos avisos</div><div id='dash-avisos'></div></div>
       </div>
     </div>

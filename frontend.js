@@ -153,7 +153,20 @@ function aplicarSesion() {
 // ── DASHBOARD ─────────────────────────────
 async function loadDash() {
   const now = new Date();
-  const mes = now.getMonth() + 1, anio = now.getFullYear();
+  // Leer selectores; si no existen todavía, usar mes actual
+  const selMes  = $id('dash-mes');
+  const selAnio = $id('dash-anio');
+  const mes  = selMes  ? Number(selMes.value)  : (now.getMonth() + 1);
+  const anio = selAnio ? Number(selAnio.value) : now.getFullYear();
+
+  // Actualizar label de fecha
+  const lbl = $id('dash-fecha-lbl');
+  if (lbl) lbl.textContent = `${MESES_FULL[mes]} ${anio}`;
+
+  // Título de recaudación dinámico
+  const tit = $id('dash-prog-titulo');
+  if (tit) tit.textContent = `Recaudación — ${MESES[mes]} ${anio}`;
+
   const [r, av, deudores] = await Promise.all([
     api(`/api/pagos/resumen?mes=${mes}&anio=${anio}`),
     api('/api/avisos'),
@@ -2126,5 +2139,13 @@ $id('tb-date').textContent = new Date().toLocaleDateString('es-MX', {
   }
 })();
 
+// Inicializar selector de mes del dashboard al mes actual
+(function() {
+  const _now = new Date();
+  const _selM = $id('dash-mes');
+  const _selA = $id('dash-anio');
+  if (_selM) _selM.value = String(_now.getMonth() + 1);
+  if (_selA) _selA.value = String(_now.getFullYear());
+})();
 loadDash();
 
