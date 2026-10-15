@@ -608,7 +608,7 @@ async function loadDeudores() {
 // ── GASTOS ORDINARIOS ─────────────────────
 async function loadGastos() {
   const m = $id('fil-mes-g').value;
-  const data = await api(m ? `/api/gastos?mes=${m}&anio=${anioActual()}` : `/api/gastos?anio=${anioActual()}`);
+  const data = await api(m ? `/api/gastos?mes=${m}&anio=${anioGastos()}` : `/api/gastos?anio=${anioGastos()}`);
   const plantilla = await api('/api/gastos/plantilla');
 
   $id('gasto-stats').innerHTML = `
@@ -624,16 +624,20 @@ async function loadGastos() {
 
   // Cargar pagos del mes para cada gasto fijo
   const mesFil = Number($id('fil-mes-g').value) || (mesActual());
+  _plantillaCache=plantilla;
   const pagosPlantilla = await Promise.all(
-    plantilla.map(g => api(`/api/gastos/plantilla/${g.id}/pagos?mes=${mesFil}&anio=${anioActual()}`))
+    plantilla.map(g => api(`/api/gastos/plantilla/${g.id}/pagos?mes=${mesFil}&anio=${anioGastos()}`))
   );
   $id('plantilla-list').innerHTML = plantilla.length
     ? plantilla.map((g, i) => {
-        const info    = pagosPlantilla[i];
-        const pagado  = info?.pagado ?? 0;
-        const pct     = g.monto > 0 ? Math.min(100, Math.round((pagado / g.monto) * 100)) : 0;
-        const color   = pct >= 100 ? 'var(--green)' : pct > 0 ? 'var(--gold)' : 'var(--red)';
-        const badge   = pct >= 100 ? '✅ Pagado' : pct > 0 ? `⏳ ${pct}%` : '⚠️ Pendiente';
+        const info=pagosPlantilla[i]||{};
+        const pagado=info.pagado??0;
+        const esperado=info.monto;
+        const sinMonto=esperado===undefined||esperado===null;
+        const pct=info.porcentaje??0;
+        const color=info.estado==='pagado'?'var(--green)':info.estado==='parcial'?'var(--gold)':'var(--red)';
+        const badge=sinMonto?'📅 Sin importe histórico':info.estado==='pagado'?'✅ Pagado':
+          info.estado==='parcial'?`⏳ ${pct}%`:'⚠️ Pendiente';
         return `
         <div class="log-entry" style="flex-direction:column;align-items:stretch;gap:6px;padding:10px 0">
           <div style="display:flex;align-items:center;gap:8px">
@@ -643,15 +647,18 @@ async function loadGastos() {
               <div style="font-size:11px;color:var(--text3)">${g.proveedor || g.categoria}</div>
             </div>
             <div style="text-align:right">
-              <div style="font-family:'DM Sans',sans-serif;font-variant-numeric:tabular-nums;font-size:13px;color:var(--gold2)">${fmtM(g.monto)}</div>
+              <div style="font-family:'DM Sans',sans-serif;font-variant-numeric:tabular-nums;font-size:13px;color:var(--gold2)">${sinMonto?'Sin importe':fmtM(esperado)}</div>
               <div style="font-size:10px;color:${color};font-weight:700">${badge}</div>
             </div>
-            ${sesion?.rol==='admin' ? `<button class="btn btn-o btn-sm" style="white-space:nowrap" onclick="abrirPagosParciales(${g.id},'${(g.concepto||'').replace(/'/g,"\\'")}',${g.monto})">💸 Abonar</button>` : ''}
+            ${sesion?.rol==='admin' ? `<div style="display:flex;flex-direction:column;gap:4px">
+ <button class="btn btn-o btn-sm" onclick="abrirPagosParciales(${g.id})">💸 Abonar</button>
+ ${g.es_variable?`<button class="btn btn-o btn-sm" onclick="guardarObjetivoMes(${g.id})">✏️ Importe del mes</button>`:''}
+ </div>` : ''}
           </div>
           ${pagado > 0 ? `
           <div style="padding-left:24px">
             <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--text3);margin-bottom:3px">
-              <span>Abonado: ${fmtM(pagado)}</span><span>Pendiente: ${fmtM(Math.max(0,g.monto-pagado))}</span>
+              <span>Abonado: ${fmtM(pagado)}</span><span>Pendiente: ${sinMonto?'Sin objetivo':fmtM(info.pendiente)}</span>
             </div>
             <div class="prog"><div class="prog-b" style="width:${pct}%;background:${color}"></div></div>
           </div>` : ''}
@@ -670,14 +677,14 @@ async function loadGastos() {
 
 async function generarGastosMes() {
   const m = $id('fil-mes-g').value || mesActual();
-  const r = await api('/api/gastos/generar-mes', { method: 'POST', body: JSON.stringify({ mes: Number(m), anio: anioActual() }) });
+  const r = await api('/api/gastos/generar-mes', { method: 'POST', body: JSON.stringify({ mes: Number(m), anio: anioGastos() }) });
   if (r.ok) { loadGastos(); showToast(`✓ ${r.creados} gastos generados del mes`); }
 }
 
 async function registrarGasto() {
   const body = {
     concepto: $id('g-concepto').value, categoria: $id('g-cat').value,
-    monto: $id('g-monto').value, mes: $id('g-mes').value, anio: anioActual(),
+    monto: $id('g-monto').value, mes: $id('g-mes').value, anio: anioGastos(),
     fecha: $id('g-fecha').value, proveedor: $id('g-prov').value, notas: $id('g-notas').value,
   };
   const r = await api('/api/gastos', { method: 'POST', body: JSON.stringify(body) });
@@ -779,11 +786,30 @@ async function delPlantilla(id) {
 
 // ── Pagos parciales de gastos fijos ──
 let _ppId = null, _ppConcepto = '', _ppMonto = 0;
+let _plantillaCache=[];
+async function guardarObjetivoMes(id) {
+ const g=_plantillaCache.find(x=>x.id===id);
+ if(!g)return;
+ const mes=Number($id('fil-mes-g').value)||mesActual(),anio=anioGastos();
+ const anterior=await api(`/api/gastos/plantilla/${id}/pagos?mes=${mes}&anio=${anio}`);
+ const valor=prompt(`Importe de ${g.concepto} en ${MESES_FULL[mes]} ${anio}. Sólo afecta este mes.`,
+   String(anterior.monto??anterior.pagado??g.monto));
+ if(valor===null)return;
+ const monto=Number(valor);
+ if(!Number.isFinite(monto)||monto<0){showToast('Importe inválido',false);return;}
+ const result=await api(`/api/gastos/plantilla/${id}/objetivo`,{
+   method:'PUT',body:JSON.stringify({mes,anio,monto})
+ });
+ if(!result.ok){showToast(result.error||'No se pudo actualizar',false);return;}
+ loadGastos();showToast('✓ Objetivo actualizado para este mes');
+}
 
-async function abrirPagosParciales(id, concepto, monto) {
-  _ppId = id; _ppConcepto = concepto; _ppMonto = monto;
-  $id('pp-titulo').textContent  = concepto;
-  $id('pp-total').textContent   = fmtM(monto);
+async function abrirPagosParciales(id) {
+  const g=_plantillaCache.find(x=>x.id===id);
+  if(!g)return;
+  _ppId=id;_ppConcepto=g.concepto;_ppMonto=g.monto;
+  $id('pp-titulo').textContent=g.concepto;
+  $id('pp-total').textContent=fmtM(g.monto);
   $id('pp-monto').value         = '';
   $id('pp-fecha').value         = hoyMX();
   $id('pp-notas').value         = '';
@@ -799,8 +825,9 @@ async function abrirPagosParciales(id, concepto, monto) {
 
 async function refreshPagosParciales() {
   const mes = Number($id('fil-mes-g').value) || (mesActual());
-  const info = await api(`/api/gastos/plantilla/${_ppId}/pagos?mes=${mes}&anio=${anioActual()}`);
-  const pct  = _ppMonto > 0 ? Math.min(100, Math.round((info.pagado / _ppMonto) * 100)) : 0;
+  const info = await api(`/api/gastos/plantilla/${_ppId}/pagos?mes=${mes}&anio=${anioGastos()}`);
+  $id('pp-total').textContent=info.monto===null?'Sin importe definido':fmtM(info.monto);
+  const pct=info.porcentaje??0;
   const color = pct >= 100 ? 'var(--green)' : pct > 0 ? 'var(--gold)' : 'var(--red)';
 
   $id('pp-resumen').innerHTML = `
@@ -838,7 +865,7 @@ async function guardarPagoParcial() {
   fd.append('fecha', $id('pp-fecha').value);
   fd.append('notas', $id('pp-notas').value);
   fd.append('mes',   mes);
-  fd.append('anio', String(anioActual()));
+  fd.append('anio', String(anioGastos()));
   const fileInput = $id('pp-comprobante');
   if (fileInput?.files?.[0]) fd.append('comprobante', fileInput.files[0]);
   const r = await apiF(`/api/gastos/plantilla/${_ppId}/pagos`, fd);
