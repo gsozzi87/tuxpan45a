@@ -27,3 +27,5 @@ jobs:
         run: bun build ./index.ts --target bun --outdir /tmp/tuxpan-backend
       - name: Ejecutar pruebas de seguridad de archivos
         run: bun test tests/*.test.ts
+      - name: Integración HTTP con SQLite temporal
+        run: bun scripts/smoke.ts
