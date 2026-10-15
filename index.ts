@@ -846,14 +846,16 @@ app.get("/api/pagos/resumen", (c) => {
   const mes  = Number(c.req.query("mes")  ?? mexicoPeriod().mes);
   const anio = Number(c.req.query("anio") ?? mexicoPeriod().anio);
   const condos = db.query("SELECT * FROM condominios WHERE activo=1").all() as any[];
-  let recaudado = 0, pagaron = 0, cuota_total = 0;
-  condos.forEach((co: any) => {
-    cuota_total += co.cuota_mensual;
-    const p = db.query(
-      "SELECT monto FROM pagos WHERE condominio_id=? AND mes=? AND anio=? AND tipo_pago='ordinario'"
-    ).get(co.id, mes, anio) as any;
-    if(p){recaudado+=p.monto;if(p.monto>=co.cuota_mensual-0.009)pagaron++;}
+  let pagaron=0,cuota_total=0;
+  condos.forEach((co:any)=>{
+    cuota_total+=co.cuota_mensual;
+    const pago=db.query("SELECT monto FROM pagos WHERE condominio_id=? AND mes=? AND anio=? AND tipo_pago='ordinario'").get(co.id,mes,anio) as any;
+    if(pago?.monto>=co.cuota_mensual-0.009)pagaron++;
   });
+  // Los ingresos realmente cobrados incluyen unidades dadas de baja que
+  // pagaron ese período: deben coincidir con el libro de caja.
+  const recaudado=(db.query("SELECT COALESCE(SUM(monto),0) t FROM pagos WHERE mes=? AND anio=? AND tipo_pago='ordinario'")
+    .get(mes,anio) as any).t;
   const pendientes = condos.length - pagaron;
   const porcentaje = cuota_total > 0 ? Math.round((recaudado / cuota_total) * 100) : 0;
 
@@ -871,7 +873,7 @@ app.get("/api/pagos/resumen", (c) => {
 
   // Plantilla fija (para calcular cobertura)
   const plantilla = db.query("SELECT * FROM gastos_plantilla WHERE activo=1").all() as any[];
-  const gastos_fijos = plantilla.reduce((s: number, g: any) => s + g.monto, 0);
+  const gastos_fijos=plantilla.reduce((total:number,g:any)=>total+(getGastoObjetivo(g,mes,anio).monto??0),0);
 
   // Ahorro / faltante del mes (abonos cuentan como egreso real)
   const total_egresos = total_gastos + total_misc + total_pagos_fijos;
@@ -889,13 +891,7 @@ app.get("/api/pagos/resumen", (c) => {
   }
   let saldo_acumulado = 0;
   for (const {mes:m, anio:a} of allMeses) {
-    const rMes = db.query("SELECT * FROM condominios WHERE activo=1").all() as any[];
-    const totalCuota = rMes.reduce((s:number,co:any)=>s+co.cuota_mensual,0);
-    let recMes = 0;
-    rMes.forEach((co:any)=>{
-      const p = db.query("SELECT monto FROM pagos WHERE condominio_id=? AND mes=? AND anio=? AND tipo_pago='ordinario'").get(co.id,m,a) as any;
-      if(p) recMes += p.monto;
-    });
+    const recMes=(db.query("SELECT COALESCE(SUM(monto),0) t FROM pagos WHERE mes=? AND anio=? AND tipo_pago='ordinario'").get(m,a) as any).t;
     const gMes   = (db.query("SELECT COALESCE(SUM(monto),0) as t FROM gastos WHERE mes=? AND anio=? AND COALESCE(es_recurrente,0)=0").get(m,a) as any)?.t ?? 0;
     const miMes  = (db.query("SELECT COALESCE(SUM(monto),0) as t FROM gastos_misc WHERE mes=? AND anio=?").get(m,a) as any)?.t ?? 0;
     const abMes  = (db.query("SELECT COALESCE(SUM(monto),0) as t FROM gastos_pagos WHERE mes=? AND anio=?").get(m,a) as any)?.t ?? 0;
@@ -1238,9 +1234,15 @@ app.post("/api/gastos/generar-mes", requireAdmin, async (c) => {
   const b = await c.req.json();
   const { mes, anio } = b;
   const plantilla = db.query("SELECT * FROM gastos_plantilla WHERE activo=1").all() as any[];
+  if(!Number.isInteger(Number(mes))||Number(mes)<1||Number(mes)>12||
+     !Number.isInteger(Number(anio))||Number(anio)<2026||Number(anio)>2100)
+    return c.json({error:'Mes o año inválidos'},400);
   const fecha = `${anio}-${String(mes).padStart(2,"0")}-01`;
   let creados = 0;
   plantilla.forEach((g: any) => {
+    // Congelar el monto planeado cuando se genera el mes: no reescribir meses anteriores.
+    db.run("INSERT OR IGNORE INTO gastos_presupuesto_mes(plantilla_id,mes,anio,monto) VALUES (?,?,?,?)",
+      [g.id,Number(mes),Number(anio),g.monto]);
     const existe = db.query(
       "SELECT id FROM gastos WHERE concepto=? AND mes=? AND anio=? AND es_recurrente=1"
     ).get(g.concepto, mes, anio);
@@ -1292,7 +1294,7 @@ app.get("/api/caja-chica", (c) => {
   ).get(mes, anio) as any).t;
   // Gastos plantilla fijos del mes (monto base)
   const plantilla = db.query("SELECT * FROM gastos_plantilla WHERE activo=1").all() as any[];
-  const gastos_fijos = plantilla.reduce((s: number, g: any) => s + g.monto, 0);
+  const gastos_fijos=plantilla.reduce((total:number,g:any)=>total+(getGastoObjetivo(g,mes,anio).monto??0),0);
   // Gastos reales registrados ese mes
   const gastos_reales = (db.query(
     "SELECT COALESCE(SUM(monto),0) as t FROM gastos WHERE mes=? AND anio=? AND COALESCE(es_recurrente,0)=0"
