@@ -1118,8 +1118,11 @@ app.get('/api/condominios/:id/cuotas',requireAdmin,c=>{
   if(!co)return c.json({ok:false,error:'Despacho no encontrado'},404);
   try {
     const desde=leerPeriodo(c.req.query('desde')),hasta=leerPeriodo(c.req.query('hasta'));
+    const excluir=Number(c.req.query('excluir_pago')||0);
+    if(excluir&&!db.query("SELECT id FROM pagos WHERE id=? AND condominio_id=? AND tipo_pago='ordinario'").get(excluir,co.id))
+      return c.json({ok:false,error:'Pago no pertenece al despacho'},403);
     const detalles=rangoMeses(desde,hasta).map(({mes,anio})=>{
-      const cuota=cuotaPeriodo(co,mes,anio),acreditado=pagosAcreditados(co.id,mes,anio);
+      const cuota=cuotaPeriodo(co,mes,anio),acreditado=pagosAcreditados(co.id,mes,anio,excluir);
       return {mes,anio,cuota,acreditado,pendiente:Math.max(0,Math.round((cuota-acreditado)*100)/100)};
     });
     const pendientes=detalles.filter(x=>x.pendiente>0);
