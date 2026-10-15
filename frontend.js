@@ -45,7 +45,19 @@ function showToast(msg, ok = true) {
   t.classList.add('show');
   setTimeout(() => t.classList.remove('show'), 3200);
 }
-function fmtM(n) { return `$${Number(n).toLocaleString('es-MX')}`; }
+const mxn = new Intl.NumberFormat('es-MX', {
+  style: 'currency', currency: 'MXN',
+  minimumFractionDigits: 0, maximumFractionDigits: 2
+});
+function fmtM(n) {
+  const v = Number(n);
+  return Number.isFinite(v) ? mxn.format(v) : '—';
+}
+function anioActual() { return new Date().getFullYear(); }
+function ppFotoReady(input) {
+  const label = $id('pp-foto-status');
+  if (label) label.textContent = input.files?.[0]?.name || 'Sin adjunto';
+}
 function esVencida(f) { return f && new Date() > new Date(f); }
 
 // ── Navegación ─────────────────────────────
@@ -271,7 +283,7 @@ async function loadDash() {
         <div style="font-size:11px;font-weight:700;color:var(--text3);letter-spacing:.8px;text-transform:uppercase;margin-bottom:8px">Cuotas del mes</div>
         <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px">
           <span style="color:var(--text2)">Recaudado</span>
-          <span style="font-family:'DM Mono',monospace;font-weight:700;color:var(--green)">${fmtM(recaudado)}</span>
+          <span style="font-family:'DM Sans',sans-serif;font-variant-numeric:tabular-nums;font-weight:700;color:var(--green)">${fmtM(recaudado)}</span>
         </div>
         <div style="display:flex;justify-content:space-between;font-size:12px;color:var(--text3)">
           <span>de ${fmtM(cuota_total)} esperado · ${porcentaje}%</span>
@@ -291,12 +303,12 @@ async function loadDash() {
         </div>
         <div style="display:flex;justify-content:space-between;font-size:13px">
           <span style="color:var(--text2)">Abonado hasta hoy</span>
-          <span style="font-family:'DM Mono',monospace;color:var(--red)">−${fmtM(abonos_fijos)}</span>
+          <span style="font-family:'DM Sans',sans-serif;font-variant-numeric:tabular-nums;color:var(--red)">−${fmtM(abonos_fijos)}</span>
         </div>
         ${gastos_otros > 0 ? `
         <div style="display:flex;justify-content:space-between;font-size:13px;margin-top:5px">
           <span style="color:var(--text2)">Otros gastos</span>
-          <span style="font-family:'DM Mono',monospace;color:var(--red)">−${fmtM(gastos_otros)}</span>
+          <span style="font-family:'DM Sans',sans-serif;font-variant-numeric:tabular-nums;color:var(--red)">−${fmtM(gastos_otros)}</span>
         </div>` : ''}
       </div>
 
@@ -304,7 +316,7 @@ async function loadDash() {
       <div style="padding-top:12px;border-top:2px solid var(--border)">
         <div style="display:flex;justify-content:space-between;font-size:14px;font-weight:700">
           <span>${balance_real >= 0 ? 'Disponible en caja' : 'Déficit'}</span>
-          <span style="font-family:'DM Mono',monospace;color:${balanceColor}">${fmtM(Math.abs(balance_real))}</span>
+          <span style="font-family:'DM Sans',sans-serif;font-variant-numeric:tabular-nums;color:${balanceColor}">${fmtM(Math.abs(balance_real))}</span>
         </div>
         <div style="font-size:11px;color:var(--text3);margin-top:4px">
           ${fmtM(recaudado)} recaudado − ${fmtM(egresos_reales)} egresado
@@ -322,7 +334,7 @@ async function loadDash() {
     <div class="log-entry" style="align-items:flex-start">
       <div class="ldot ${dcol[a.tipo] || ''}" style="margin-top:4px;flex-shrink:0"></div>
       <div style="flex:1;min-width:0">
-        <div style="font-size:11px;color:var(--text3);font-family:'DM Mono',monospace;margin-bottom:2px">${a.created_at?.slice(0,10) || ''} · ${tiLabel[a.tipo] || a.tipo}</div>
+        <div style="font-size:11px;color:var(--text3);font-family:'DM Sans',sans-serif;font-variant-numeric:tabular-nums;margin-bottom:2px">${a.created_at?.slice(0,10) || ''} · ${tiLabel[a.tipo] || a.tipo}</div>
         <div style="font-size:14px;font-weight:700;line-height:1.3;margin-bottom:4px">${a.titulo}</div>
         ${a.contenido ? `<div style="font-size:13px;color:var(--text2);line-height:1.55">${a.contenido.slice(0,120)}${a.contenido.length>120?'…':''}</div>` : ''}
       </div>
@@ -363,10 +375,10 @@ async function loadCuentas() {
       : '';
     return `
       <tr>
-        <td><span class="badge bb" style="font-family:'DM Mono',monospace">${co.unidad}</span></td>
+        <td><span class="badge bb" style="font-family:'DM Sans',sans-serif;font-variant-numeric:tabular-nums">${co.unidad}</span></td>
         <td><strong>${co.propietario}</strong> ${editBtn}</td>
-        <td style="font-family:'DM Mono',monospace;font-size:12px">${fmtM(co.cuota_mensual)}</td>
-        <td style="font-size:12px;color:var(--blue);font-family:'DM Mono',monospace">${co.indiviso}%</td>
+        <td style="font-family:'DM Sans',sans-serif;font-variant-numeric:tabular-nums;font-size:12px">${fmtM(co.cuota_mensual)}</td>
+        <td style="font-size:12px;color:var(--blue);font-family:'DM Sans',sans-serif;font-variant-numeric:tabular-nums">${co.indiviso}%</td>
         ${celdas}
       </tr>`;
   }).join('');
@@ -399,7 +411,7 @@ const CATICONS2 = { seguridad:'🔒', elevador:'🛗', servicios:'💡', manteni
 
 async function loadCaja() {
   const mes  = $id('caja-mes')?.value  || '';
-  const anio = $id('caja-anio')?.value || '2026';
+  const anio = $id('caja-anio')?.value || String(anioActual());
   const data = await api(`/api/movimientos?anio=${anio}${mes ? '&mes='+mes : ''}`);
 
   // ── Stats ──
@@ -457,11 +469,11 @@ async function loadCaja() {
             : '';
           return `
             <tr style="border-bottom:1px solid var(--border);${rowBg}">
-              <td style="padding:10px 14px;white-space:nowrap;color:var(--text3);font-size:12px;font-family:'DM Mono',monospace">${fecha}</td>
+              <td style="padding:10px 14px;white-space:nowrap;color:var(--text3);font-size:12px;font-family:'DM Sans',sans-serif;font-variant-numeric:tabular-nums">${fecha}</td>
               <td style="padding:10px 14px">${concepto}${nota}</td>
-              <td style="padding:10px 14px;text-align:right;font-family:'DM Mono',monospace;font-weight:700;color:var(--green)">${esIngreso ? fmtM(m.monto) : ''}</td>
-              <td style="padding:10px 14px;text-align:right;font-family:'DM Mono',monospace;font-weight:700;color:var(--red)">${!esIngreso ? fmtM(m.monto) : ''}</td>
-              <td style="padding:10px 14px;text-align:right;font-family:'DM Mono',monospace;font-weight:600;color:${saldoColor}">${fmtM(m.saldo_acumulado)}</td>
+              <td style="padding:10px 14px;text-align:right;font-family:'DM Sans',sans-serif;font-variant-numeric:tabular-nums;font-weight:700;color:var(--green)">${esIngreso ? fmtM(m.monto) : ''}</td>
+              <td style="padding:10px 14px;text-align:right;font-family:'DM Sans',sans-serif;font-variant-numeric:tabular-nums;font-weight:700;color:var(--red)">${!esIngreso ? fmtM(m.monto) : ''}</td>
+              <td style="padding:10px 14px;text-align:right;font-family:'DM Sans',sans-serif;font-variant-numeric:tabular-nums;font-weight:600;color:${saldoColor}">${fmtM(m.saldo_acumulado)}</td>
               ${delBtn}
             </tr>`;
         }).join('')}
@@ -492,7 +504,7 @@ async function borrarMovimiento(tabla, id, concepto) {
 
 // ── DEUDORES ──────────────────────────────
 async function loadDeudores() {
-  const d = await api('/api/pagos/deudores?anio=2026');
+  const d = await api(`/api/pagos/deudores?anio=${anioActual()}`);
   if (!d.length) {
     $id('deudores-content').innerHTML = '<div style="text-align:center;padding:60px;color:var(--text3)"><div style="font-size:48px;margin-bottom:14px">🎉</div><div>¡Todos al corriente!</div></div>';
     return;
@@ -500,7 +512,7 @@ async function loadDeudores() {
   const totalAdeudo = d.reduce((s, x) => s + x.adeudo, 0);
   $id('deudores-content').innerHTML = `
     <div class="stat" style="--ac:var(--red);margin-bottom:18px;display:inline-block;min-width:220px">
-      <div class="stat-lbl">Total adeudado 2026</div>
+      <div class="stat-lbl">Total adeudado ${anioActual()}</div>
       <div class="stat-val">${fmtM(totalAdeudo)}</div>
     </div>
     <div class="tw">
@@ -511,9 +523,9 @@ async function loadDeudores() {
             <tr>
               <td><span class="badge bb">${x.unidad}</span></td>
               <td><strong>${x.propietario}</strong></td>
-              <td style="font-family:'DM Mono',monospace">${fmtM(x.cuota_mensual)}</td>
+              <td style="font-family:'DM Sans',sans-serif;font-variant-numeric:tabular-nums">${fmtM(x.cuota_mensual)}</td>
               <td>${x.meses_sin_pagar.map(m => `<span class="badge br" style="margin-right:3px">${MESES[m]}</span>`).join('')}</td>
-              <td style="color:var(--red);font-weight:700;font-family:'DM Mono',monospace">${fmtM(x.adeudo)}</td>
+              <td style="color:var(--red);font-weight:700;font-family:'DM Sans',sans-serif;font-variant-numeric:tabular-nums">${fmtM(x.adeudo)}</td>
             </tr>`).join('')}
         </tbody>
       </table>
@@ -523,7 +535,7 @@ async function loadDeudores() {
 // ── GASTOS ORDINARIOS ─────────────────────
 async function loadGastos() {
   const m = $id('fil-mes-g').value;
-  const data = await api(m ? `/api/gastos?mes=${m}&anio=2026` : '/api/gastos?anio=2026');
+  const data = await api(m ? `/api/gastos?mes=${m}&anio=${anioActual()}` : `/api/gastos?anio=${anioActual()}`);
   const plantilla = await api('/api/gastos/plantilla');
 
   $id('gasto-stats').innerHTML = `
@@ -540,7 +552,7 @@ async function loadGastos() {
   // Cargar pagos del mes para cada gasto fijo
   const mesFil = Number($id('fil-mes-g').value) || (new Date().getMonth() + 1);
   const pagosPlantilla = await Promise.all(
-    plantilla.map(g => api(`/api/gastos/plantilla/${g.id}/pagos?mes=${mesFil}&anio=2026`))
+    plantilla.map(g => api(`/api/gastos/plantilla/${g.id}/pagos?mes=${mesFil}&anio=${anioActual()}`))
   );
   $id('plantilla-list').innerHTML = plantilla.length
     ? plantilla.map((g, i) => {
@@ -558,7 +570,7 @@ async function loadGastos() {
               <div style="font-size:11px;color:var(--text3)">${g.proveedor || g.categoria}</div>
             </div>
             <div style="text-align:right">
-              <div style="font-family:'DM Mono',monospace;font-size:13px;color:var(--gold2)">${fmtM(g.monto)}</div>
+              <div style="font-family:'DM Sans',sans-serif;font-variant-numeric:tabular-nums;font-size:13px;color:var(--gold2)">${fmtM(g.monto)}</div>
               <div style="font-size:10px;color:${color};font-weight:700">${badge}</div>
             </div>
             ${sesion?.rol==='admin' ? `<button class="btn btn-o btn-sm" style="white-space:nowrap" onclick="abrirPagosParciales(${g.id},'${(g.concepto||'').replace(/'/g,"\\'")}',${g.monto})">💸 Abonar</button>` : ''}
@@ -578,21 +590,21 @@ async function loadGastos() {
       <td>${g.concepto}</td>
       <td><span class="badge bo">${CATICONS[g.categoria] || '📦'} ${g.categoria}</span></td>
       <td style="font-size:12px;color:var(--text3)">${g.proveedor || '—'}</td>
-      <td style="font-family:'DM Mono',monospace;font-weight:600;color:var(--red)">${fmtM(g.monto)}</td>
+      <td style="font-family:'DM Sans',sans-serif;font-variant-numeric:tabular-nums;font-weight:600;color:var(--red)">${fmtM(g.monto)}</td>
       ${sesion?.rol === 'admin' ? `<td><button class="btn btn-r btn-sm" onclick="delGasto(${g.id})">✕</button></td>` : '<td></td>'}
     </tr>`).join('');
 }
 
 async function generarGastosMes() {
   const m = $id('fil-mes-g').value || new Date().getMonth() + 1;
-  const r = await api('/api/gastos/generar-mes', { method: 'POST', body: JSON.stringify({ mes: Number(m), anio: 2026 }) });
+  const r = await api('/api/gastos/generar-mes', { method: 'POST', body: JSON.stringify({ mes: Number(m), anio: anioActual() }) });
   if (r.ok) { loadGastos(); showToast(`✓ ${r.creados} gastos generados del mes`); }
 }
 
 async function registrarGasto() {
   const body = {
     concepto: $id('g-concepto').value, categoria: $id('g-cat').value,
-    monto: $id('g-monto').value, mes: $id('g-mes').value, anio: '2026',
+    monto: $id('g-monto').value, mes: $id('g-mes').value, anio: anioActual(),
     fecha: $id('g-fecha').value, proveedor: $id('g-prov').value, notas: $id('g-notas').value,
   };
   const r = await api('/api/gastos', { method: 'POST', body: JSON.stringify(body) });
@@ -613,7 +625,7 @@ async function loadPlantillaAdmin() {
         <div style="font-size:13px;font-weight:600">${g.concepto}</div>
         <div style="font-size:11px;color:var(--text3)">${g.categoria} · ${g.proveedor || '—'}${g.es_variable ? ' · <span style="color:var(--blue)">variable</span>' : ''}</div>
       </div>
-      <div style="font-family:'DM Mono',monospace;font-size:13px;color:var(--gold2)">${fmtM(g.monto)}</div>
+      <div style="font-family:'DM Sans',sans-serif;font-variant-numeric:tabular-nums;font-size:13px;color:var(--gold2)">${fmtM(g.monto)}</div>
       <button class="btn btn-o btn-sm" onclick="editPlantilla(${g.id},'${(g.concepto||'').replace(/'/g,"\\'")}','${g.categoria}',${g.monto},'${g.proveedor||''}',${g.es_variable||0})">✏️</button>
       <button class="btn btn-r btn-sm" onclick="delPlantilla(${g.id})">✕</button>
     </div>`).join('') || '<div style="color:var(--text3);font-size:13px;padding:10px 0">Sin conceptos</div>';
@@ -631,7 +643,7 @@ function editPlantilla(id, concepto, categoria, monto, proveedor, es_variable) {
 
 async function loadGastosMisc() {
   const m = $id('fil-mes-g')?.value || (new Date().getMonth() + 1);
-  const misc = await api(`/api/gastos-misc?mes=${m}&anio=2026`);
+  const misc = await api(`/api/gastos-misc?mes=${m}&anio=${anioActual()}`);
   const total = misc.reduce((s, x) => s + x.monto, 0);
   const el = $id('misc-list');
   if (!el) return;
@@ -646,7 +658,7 @@ async function loadGastosMisc() {
           <div style="font-size:13px;font-weight:600">${g.concepto}</div>
           <div style="font-size:11px;color:var(--text3)">${g.fecha || ''} ${g.notas ? '· ' + g.notas : ''}</div>
         </div>
-        <div style="font-family:'DM Mono',monospace;font-size:13px;color:var(--red)">${fmtM(g.monto)}</div>
+        <div style="font-family:'DM Sans',sans-serif;font-variant-numeric:tabular-nums;font-size:13px;color:var(--red)">${fmtM(g.monto)}</div>
         ${sesion?.rol === 'admin' ? `<button class="btn btn-r btn-sm" onclick="delMisc(${g.id})">✕</button>` : ''}
       </div>`).join('') : '<div style="color:var(--text3);font-size:13px;padding:20px 0;text-align:center">Sin gastos misceláneos este mes</div>'}`;
 }
@@ -658,7 +670,7 @@ async function registrarMisc() {
     body: JSON.stringify({
       concepto: $id('misc-concepto').value,
       monto:    $id('misc-monto').value,
-      mes:      m, anio: 2026,
+      mes:      m, anio: anioActual(),
       fecha:    $id('misc-fecha').value,
       notas:    $id('misc-notas').value,
     }),
@@ -706,20 +718,22 @@ async function abrirPagosParciales(id, concepto, monto) {
   if (fi) fi.value = '';
   const lbl = $id('pp-comp-label');
   if (lbl) lbl.textContent = '📎 Adjuntar comprobante';
+  const fileStatus = $id('pp-foto-status');
+  if (fileStatus) fileStatus.textContent = 'Sin adjunto';
   await refreshPagosParciales();
   openModal('modal-pagos-parciales');
 }
 
 async function refreshPagosParciales() {
   const mes = Number($id('fil-mes-g').value) || (new Date().getMonth() + 1);
-  const info = await api(`/api/gastos/plantilla/${_ppId}/pagos?mes=${mes}&anio=2026`);
+  const info = await api(`/api/gastos/plantilla/${_ppId}/pagos?mes=${mes}&anio=${anioActual()}`);
   const pct  = _ppMonto > 0 ? Math.min(100, Math.round((info.pagado / _ppMonto) * 100)) : 0;
   const color = pct >= 100 ? 'var(--green)' : pct > 0 ? 'var(--gold)' : 'var(--red)';
 
   $id('pp-resumen').innerHTML = `
     <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:6px">
       <span style="color:var(--text2)">Pagado:</span>
-      <span style="font-family:'DM Mono',monospace;font-weight:700;color:${color}">${fmtM(info.pagado)}</span>
+      <span style="font-family:'DM Sans',sans-serif;font-variant-numeric:tabular-nums;font-weight:700;color:${color}">${fmtM(info.pagado)}</span>
     </div>
     <div class="prog" style="margin-bottom:6px"><div class="prog-b" style="width:${pct}%;background:${color}"></div></div>
     <div style="display:flex;justify-content:space-between;font-size:12px;color:var(--text3)">
@@ -735,7 +749,7 @@ async function refreshPagosParciales() {
             ${p.notas ? `<div style="font-size:11px;color:var(--text3)">${p.notas}</div>` : ''}
             ${p.comprobante_path ? `<a href="${p.comprobante_path}" target="_blank" style="font-size:11px;color:var(--blue);text-decoration:none">📎 Ver comprobante</a>` : ''}
           </div>
-          <div style="font-family:'DM Mono',monospace;font-size:13px;color:var(--green);white-space:nowrap">${fmtM(p.monto)}</div>
+          <div style="font-family:'DM Sans',sans-serif;font-variant-numeric:tabular-nums;font-size:13px;color:var(--green);white-space:nowrap">${fmtM(p.monto)}</div>
           <button class="btn btn-r btn-sm" onclick="delPagoParcial(${p.id})">✕</button>
         </div>`).join('')
     : '<div style="color:var(--text3);font-size:12px;padding:14px 0;text-align:center">Sin abonos registrados este mes</div>';
@@ -751,7 +765,7 @@ async function guardarPagoParcial() {
   fd.append('fecha', $id('pp-fecha').value);
   fd.append('notas', $id('pp-notas').value);
   fd.append('mes',   mes);
-  fd.append('anio',  '2026');
+  fd.append('anio', String(anioActual()));
   const fileInput = $id('pp-comprobante');
   if (fileInput?.files?.[0]) fd.append('comprobante', fileInput.files[0]);
   const r = await apiF(`/api/gastos/plantilla/${_ppId}/pagos`, fd);
@@ -762,7 +776,7 @@ async function guardarPagoParcial() {
     loadDash();
     $id('pp-monto').value = '';
     $id('pp-notas').value = '';
-    if (fileInput) { fileInput.value = ''; $id('pp-comp-label').textContent = '📎 Adjuntar comprobante'; }
+    if (fileInput) { fileInput.value = ''; ppFotoReady(fileInput); }
   } else if (r.error) {
     showToast('⚠️ ' + r.error);
   }
@@ -827,7 +841,7 @@ async function loadGastosExt() {
           <div style="font-size:11px;color:var(--text3);margin-bottom:4px">Presupuesto #${n}</div>
           <div style="font-weight:600;font-size:13px">${p.empresa}</div>
           <div style="font-size:12px;color:var(--text2)">Presentado por ${p.nombre_presentante} · Despacho ${p.despacho}</div>
-          <div style="font-family:'DM Mono',monospace;font-size:14px;color:var(--gold2);margin-top:4px">${fmtM(p.monto)}</div>
+          <div style="font-family:'DM Sans',sans-serif;font-variant-numeric:tabular-nums;font-size:14px;color:var(--gold2);margin-top:4px">${fmtM(p.monto)}</div>
           ${p.archivo_path ? `<a href="${p.archivo_path}" target="_blank" class="btn btn-o btn-sm" style="margin-top:8px;display:inline-flex">📄 Ver archivo</a>` : ''}
         </div>`;
       return `
@@ -850,7 +864,7 @@ async function loadGastosExt() {
             </div>
           </div>
           <div style="text-align:right;flex-shrink:0">
-            <div style="font-family:'DM Mono',monospace;font-size:22px;font-weight:700;color:var(--purple)">${fmtM(g.monto_total)}</div>
+            <div style="font-family:'DM Sans',sans-serif;font-variant-numeric:tabular-nums;font-size:22px;font-weight:700;color:var(--purple)">${fmtM(g.monto_total)}</div>
             <div style="font-size:11px;color:var(--text3);margin-top:3px">Monto total</div>
             ${g.aporte_caja > 0 ? `
               <div style="font-size:11px;color:var(--blue);margin-top:2px">🏦 Caja chica: −${fmtM(g.aporte_caja)}</div>
@@ -870,7 +884,7 @@ async function loadGastosExt() {
             ${(g.cuotas_por_condo || []).filter(co => co.cuota_mensual > 0).map(co => `
               <div style="background:var(--bg3);border-radius:8px;padding:7px 11px;font-size:12px">
                 <div style="font-weight:700;color:var(--text)">${co.unidad}</div>
-                <div style="color:var(--purple);font-family:'DM Mono',monospace">${fmtM(co.cuota_ext)}</div>
+                <div style="color:var(--purple);font-family:'DM Sans',sans-serif;font-variant-numeric:tabular-nums">${fmtM(co.cuota_ext)}</div>
                 <div class="indiviso-bar" style="width:${Math.min(co.indiviso * 5, 100)}%"></div>
               </div>`).join('')}
           </div>
@@ -1033,7 +1047,7 @@ async function loadVotaciones() {
             <div style="display:flex;align-items:center;gap:9px;margin-bottom:7px;flex-wrap:wrap">
               <span class="badge ${cerr ? 'br' : 'bg'}">${cerr ? '🔒 Cerrada' : '🟢 Activa'}</span>
               ${v.tipo === 'presupuesto' ? `<span class="badge bpu">💎 Presupuesto</span>` : ''}
-              ${v.fecha_cierre ? `<span style="font-size:11px;color:var(--text3);font-family:'DM Mono',monospace">Cierre: ${new Date(v.fecha_cierre).toLocaleString('es-MX')}</span>` : ''}
+              ${v.fecha_cierre ? `<span style="font-size:11px;color:var(--text3);font-family:'DM Sans',sans-serif;font-variant-numeric:tabular-nums">Cierre: ${new Date(v.fecha_cierre).toLocaleString('es-MX')}</span>` : ''}
             </div>
             <div style="font-family:'Playfair Display',serif;font-size:17px;font-weight:700;margin-bottom:5px">${v.titulo}</div>
             ${v.descripcion ? `<div style="font-size:13px;color:var(--text2);line-height:1.5">${v.descripcion}</div>` : ''}
@@ -1227,7 +1241,7 @@ async function loadSits() {
     <div class="sit-card ${s.urgencia} ${s.estado === 'resuelto' ? 'resuelto' : ''}">
       <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px;margin-bottom:10px">
         <div>
-          <div style="font-size:11px;color:var(--text3);font-family:'DM Mono',monospace">SIT #${String(s.numero).padStart(2,'0')}</div>
+          <div style="font-size:11px;color:var(--text3);font-family:'DM Sans',sans-serif;font-variant-numeric:tabular-nums">SIT #${String(s.numero).padStart(2,'0')}</div>
           <div style="font-weight:600;font-size:14px;margin-top:2px">${s.titulo}</div>
         </div>
         <span class="badge" style="background:${urgCl[s.urgencia]}22;color:${urgCl[s.urgencia]};white-space:nowrap;flex-shrink:0">${urgLb[s.urgencia]}</span>
@@ -1341,7 +1355,7 @@ async function loadMan() {
             <span style="font-size:12px;color:var(--text3)">${s.estado === 'pendiente' ? '🕐 Pendiente' : s.estado === 'en-proceso' ? '⚙️ En proceso' : '✅ Resuelto'}</span>
             <span class="badge" style="background:${pc[s.prioridad]}22;color:${pc[s.prioridad]}">${s.prioridad}</span>
             ${s.despacho ? `<span class="badge bb" style="margin-left:auto">${s.despacho}</span>` : ''}
-            <span style="font-size:10px;font-family:'DM Mono',monospace;color:var(--text3)">${s.created_at?.slice(0,10)}</span>
+            <span style="font-size:10px;font-family:'DM Sans',sans-serif;font-variant-numeric:tabular-nums;color:var(--text3)">${s.created_at?.slice(0,10)}</span>
           </div>
           <div style="font-size:14px;font-weight:600;margin-bottom:4px">${s.descripcion}</div>
           <div style="font-size:12px;color:var(--text3)">Por: ${s.autor}</div>
@@ -1652,7 +1666,7 @@ async function loadElevador() {
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
           <span class="elev-status ${estClr[r.estado_general] || 'ok'}">${estIco[r.estado_general] || '✅'} ${r.estado_general || 'Bueno'}</span>
           <span class="badge bo">${r.tipo_revision}</span>
-          ${r.costo ? `<span style="font-family:'DM Mono',monospace;font-size:13px;color:var(--gold2)">${fmtM(r.costo)}</span>` : ''}
+          ${r.costo ? `<span style="font-family:'DM Sans',sans-serif;font-variant-numeric:tabular-nums;font-size:13px;color:var(--gold2)">${fmtM(r.costo)}</span>` : ''}
         </div>
       </div>
       ${r.trabajo_realizado ? `
@@ -1706,7 +1720,7 @@ async function loadAvisos() {
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:7px;flex-wrap:wrap;gap:7px">
         <div style="font-weight:600">${ti[a.tipo] || '📢'} ${a.autor}</div>
         <div style="display:flex;align-items:center;gap:8px">
-          <div style="font-size:11px;color:var(--text3);font-family:'DM Mono',monospace">${a.created_at?.slice(0,10) || ''}</div>
+          <div style="font-size:11px;color:var(--text3);font-family:'DM Sans',sans-serif;font-variant-numeric:tabular-nums">${a.created_at?.slice(0,10) || ''}</div>
           ${sesion?.rol === 'admin' ? `
             <button class="btn btn-o btn-sm" onclick="editAviso(${a.id},'${tit}','${cnt}','${a.tipo}')">✏️ Editar</button>
             <button class="btn btn-r btn-sm" onclick="delAviso(${a.id})">✕</button>` : ''}
@@ -1767,7 +1781,7 @@ async function loadActas() {
     <div class="card" style="margin-bottom:14px">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:9px">
         <div>
-          <div style="font-size:11px;color:var(--text3);font-family:'DM Mono',monospace">ACTA FOLIO #${String(a.folio || 0).padStart(3,'0')}</div>
+          <div style="font-size:11px;color:var(--text3);font-family:'DM Sans',sans-serif;font-variant-numeric:tabular-nums">ACTA FOLIO #${String(a.folio || 0).padStart(3,'0')}</div>
           <div style="font-family:'Playfair Display',serif;font-size:17px;font-weight:700;margin-top:2px">Asamblea del ${a.fecha}</div>
           <div style="font-size:12px;color:var(--text3);margin-top:2px">Asistentes: ${a.num_asistentes || '?'}/${a.total_condominos || 16}</div>
         </div>
@@ -1899,7 +1913,7 @@ function abrirCarpeta(key, label) {
               <div style="font-size:36px;margin-bottom:9px">${isPDF ? '📄' : '🖼️'}</div>
               <div style="font-size:12px;font-weight:600;margin-bottom:4px">${r.subcategoria || r.proveedor || 'Recibo'}</div>
               ${r.mes ? `<div style="font-size:11px;color:var(--text3)">${MESES[r.mes]} ${r.anio || ''}</div>` : ''}
-              ${r.monto ? `<div style="font-family:'DM Mono',monospace;font-size:13px;color:var(--gold2);margin-top:4px">${fmtM(r.monto)}</div>` : ''}
+              ${r.monto ? `<div style="font-family:'DM Sans',sans-serif;font-variant-numeric:tabular-nums;font-size:13px;color:var(--gold2);margin-top:4px">${fmtM(r.monto)}</div>` : ''}
               <div style="font-size:10px;color:var(--text3);margin-top:4px">${r.created_at?.slice(0,10) || ''}</div>
               ${sesion?.rol === 'admin' ? `<button class="btn btn-r btn-sm" style="margin-top:8px" onclick="event.stopPropagation();delRecibo(${r.id})">✕</button>` : ''}
             </div>`;
@@ -2095,8 +2109,8 @@ async function loadCondosAdmin() {
             <tr>
               <td><span class="badge bb">${c.unidad}</span></td>
               <td>${c.propietario}</td>
-              <td style="font-family:'DM Mono',monospace">${fmtM(c.cuota_mensual)}</td>
-              <td style="font-family:'DM Mono',monospace;color:var(--blue)">${c.indiviso}%</td>
+              <td style="font-family:'DM Sans',sans-serif;font-variant-numeric:tabular-nums">${fmtM(c.cuota_mensual)}</td>
+              <td style="font-family:'DM Sans',sans-serif;font-variant-numeric:tabular-nums;color:var(--blue)">${c.indiviso}%</td>
               <td><button class="detalle-btn" onclick="abrirEditCondo(${c.id},'${c.unidad}','${c.propietario.replace(/'/g,"\\'")}','${c.email||''}','${c.telefono||''}',${c.cuota_mensual})">✏️ Editar</button></td>
             </tr>`).join('')}
         </tbody>
