@@ -892,6 +892,28 @@ async function delPagoParcial(id) {
 }
 
 // ── PAGOS ─────────────────────────────────
+let _unidadesParaPago=[];
+async function prepararRegistroPago() {
+  selectPeriodo('pago-mes',mesActual());
+  selectPeriodo('pago-anio',anioActual());
+  $id('pago-fecha').value=hoyMX();
+  const data=await api('/api/condominios');
+  if(!Array.isArray(data)){showToast('No se pudieron cargar los despachos',false);return;}
+  _unidadesParaPago=data.filter(c=>c.activo);
+  const sel=$id('pago-condo');
+  const previo=sel.value;
+  sel.innerHTML=_unidadesParaPago.map(c=>`<option value="${c.id}">${escapeHtml(c.unidad)} — ${escapeHtml(c.propietario)}</option>`).join('');
+  if(_unidadesParaPago.some(c=>String(c.id)===previo))sel.value=previo;
+  autoMontoPago();
+}
+function autoMontoPago() {
+  const id=Number($id('pago-condo')?.value);
+  const condo=_unidadesParaPago.find(c=>c.id===id)||condosCache.find(c=>c.id===id);
+  const el=$id('pago-monto'),info=$id('pago-cuota-sugerida');
+  if(!condo){if(el)el.value='';if(info)info.textContent='Seleccioná un despacho';return;}
+  if(el)el.value=Number(condo.cuota_mensual).toFixed(2);
+  if(info)info.textContent=`Cuota registrada: ${fmtM(condo.cuota_mensual)} · podés modificar el importe`;
+}
 async function registrarPago() {
   const fd = new FormData();
   fd.append('condominio_id', $id('pago-condo').value);
@@ -905,9 +927,19 @@ async function registrarPago() {
   fd.append('notas',         $id('pago-notas').value);
   const comp = $id('pago-comp').files[0];
   if (comp) fd.append('comprobante', comp);
-  const r = await apiF('/api/pagos', fd);
-  if (r.ok) { closeModal('modal-pago'); loadCuentas(); loadDash(); showToast('✓ Pago registrado'); }
-  else showToast('Error: ' + r.error, false);
+  if(!Number.isFinite(Number($id('pago-monto').value))||Number($id('pago-monto').value)<=0) {
+    showToast('Ingresá un monto válido',false);return;
+  }
+  let r=await apiF('/api/pagos',fd);
+  if(r.requiere_confirmacion) {
+    if(!confirm(`Ya existe un pago de este despacho para ${MESES_FULL[Number($id('pago-mes').value)]} ${$id('pago-anio').value}.\n¿Querés ACTUALIZAR el pago existente? Quedará registrado el cambio.`))return;
+    fd.set('confirm_replace','1');
+    r=await apiF('/api/pagos',fd);
+  }
+  if(r.ok) {
+    closeModal('modal-pago');loadCuentas();loadDash();loadDeudores();loadCaja();
+    showToast(r.actualizado?'✓ Pago actualizado con historial':'✓ Pago registrado');
+  } else showToast('Error: '+(r.error||'No se pudo registrar'),false);
 }
 
 // ── GASTOS EXTRAORDINARIOS ────────────────
