@@ -1076,6 +1076,8 @@ function recalcularGext() {
 }
 
 function abrirNuevoGext() {
+  selectPeriodo('gext-mes-ini',mesActual());
+  selectPeriodo('gext-anio-ini',anioActual());
   $id('gext-edit-id').value     = '';
   $id('gext-modal-titulo').textContent = '💎 Nuevo Gasto Extraordinario';
   $id('gext-titulo').value      = '';
@@ -1089,6 +1091,8 @@ function abrirNuevoGext() {
 }
 
 function abrirEditGext(g) {
+  selectPeriodo('gext-mes-ini',g.mes_inicio);
+  selectPeriodo('gext-anio-ini',g.anio_inicio);
   $id('gext-edit-id').value     = g.id;
   $id('gext-modal-titulo').textContent = '✏️ Editar Gasto Extraordinario';
   $id('gext-titulo').value      = g.titulo || '';
