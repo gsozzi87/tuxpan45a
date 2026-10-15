@@ -270,6 +270,7 @@ async function loadDash() {
   // ── Cálculos clave ──
   const cuota_total    = r.cuota_total   || 0;
   const recaudado      = r.recaudado     || 0;
+  const acreditado_mes = r.acreditado_mes || 0;
   const gastos_fijos   = r.gastos_fijos  || 0;
   const total_gastos   = (r.total_gastos || 0) + (r.total_misc || 0);
   const ahorro_mes     = r.ahorro_mes    || 0;
@@ -300,9 +301,9 @@ async function loadDash() {
       <div class="stat-sub">de ${r.total_condominios} unidades activas · <strong style="color:${r.pendientes > 0 ? 'var(--red)' : 'var(--green)'}">${r.pendientes} pendientes</strong></div>
     </div>
     <div class="stat" style="--ac:var(--gold)">
-      <div class="stat-lbl">Recaudado ${mesNom}</div>
+      <div class="stat-lbl">Cobrado en caja ${mesNom}</div>
       <div class="stat-val" style="font-size:19px">${fmtM(recaudado)}</div>
-      <div class="stat-sub">de ${fmtM(cuota_total)} esperado · <strong style="color:${porcentaje>=100?'var(--green)':'var(--gold)'}">${porcentaje}%</strong></div>
+      <div class="stat-sub">Acreditado a cuotas: ${fmtM(acreditado_mes)} de ${fmtM(cuota_total)} · <strong style="color:${porcentaje>=100?'var(--green)':'var(--gold)'}">${porcentaje}%</strong></div>
     </div>
     <div class="stat" style="--ac:${ahorroColor}">
       <div class="stat-lbl">${ahorro_mes >= 0 ? 'Ahorro del mes' : 'Déficit del mes'}</div>
@@ -361,12 +362,12 @@ async function loadDash() {
       <div style="margin-bottom:14px">
         <div style="font-size:11px;font-weight:700;color:var(--text3);letter-spacing:.8px;text-transform:uppercase;margin-bottom:8px">Cuotas del mes</div>
         <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px">
-          <span style="color:var(--text2)">Recaudado</span>
-          <span style="font-family:'DM Sans',sans-serif;font-variant-numeric:tabular-nums;font-weight:700;color:var(--green)">${fmtM(recaudado)}</span>
+          <span style="color:var(--text2)">Acreditado a cuotas de este mes</span>
+          <span style="font-family:'DM Sans',sans-serif;font-variant-numeric:tabular-nums;font-weight:700;color:var(--green)">${fmtM(acreditado_mes)}</span>
         </div>
         <div style="display:flex;justify-content:space-between;font-size:12px;color:var(--text3)">
           <span>de ${fmtM(cuota_total)} esperado · ${porcentaje}%</span>
-          <span style="color:${recaudado < cuota_total ? 'var(--red)' : 'var(--green)'}">${recaudado < cuota_total ? '⚠️ Falta: '+fmtM(cuota_total - recaudado) : '✅ Completo'}</span>
+          <span style="color:${acreditado_mes < cuota_total ? 'var(--red)' : 'var(--green)'}">${acreditado_mes < cuota_total ? '⚠️ Falta: '+fmtM(cuota_total - acreditado_mes) : '✅ Completo'}</span>
         </div>
       </div>
 
@@ -439,17 +440,20 @@ async function loadCuentas() {
   ).join('');
 
   const rows = condos.map(co => {
-    const celdas = co.meses.map(({ mes, anio, pago }) => {
-      const now = new Date();
-      const esFuturo = anio > now.getFullYear() || (anio === now.getFullYear() && mes > now.getMonth() + 1);
-      if (esFuturo) return `<td style="text-align:center"><span class="mes-dot futuro">—</span></td>`;
+    const celdas=co.meses.map(({mes,anio,pago,cuota,pendiente,estado})=>{
+      const now=periodoMX();
+      const futuro=anio>now.anio||(anio===now.anio&&mes>now.mes);
+      if(futuro&&!pago)return `<td style="text-align:center"><span class="mes-dot futuro">—</span></td>`;
       if(pago)return `<td style="text-align:center">
-        ${pago.monto < co.cuota_mensual-0.009 ?
-          `<span class="mes-dot" style="background:var(--gold-dim);color:var(--gold)" title="Abonado ${fmtM(pago.monto)} · Falta ${fmtM(co.cuota_mensual-pago.monto)}">◐</span><div style="font-size:9px;color:var(--gold)">Parcial</div>`:
-          `<span class="mes-dot pagado" title="${fmtM(pago.monto)} · ${escapeHtml(pago.numero_recibo||'')}">✓</span>`}
-        ${sesion?.rol==='admin'?`<br><button class="btn btn-r" style="font-size:10px;padding:2px 6px;margin-top:2px;line-height:1" onclick="borrarPagoCondo(${pago.id},${co.id},'${MESES[mes]}')">✕</button>`:''}
+        ${estado==='parcial'?
+          `<span class="mes-dot" style="background:var(--gold-dim);color:var(--gold)" title="Cuota ${fmtM(cuota)} · Abonado ${fmtM(pago.monto)} · Falta ${fmtM(pendiente)}">◐</span><div style="font-size:9px;color:var(--gold)">Parcial</div>`:
+          `<span class="mes-dot pagado" title="Cuota ${fmtM(cuota)} · Cubierto ${fmtM(pago.monto)}${pago.distribuido?' mediante anticipo':''}">✓</span>`}
+        ${sesion?.rol==='admin'&&pago.distribuido&&pago.id&&pago.origen_pago_id===pago.id?
+          `<br><button class="btn btn-o" style="font-size:9px;padding:2px 5px;margin-top:3px" title="Editar meses cubiertos por el pago original" onclick="abrirDistribucionPago(${pago.id})">📅 Editar</button>`:
+          sesion?.rol==='admin'&&!pago.distribuido&&pago.id?
+          `<br><button class="btn btn-r" style="font-size:10px;padding:2px 6px;margin-top:2px" onclick="borrarPagoCondo(${pago.id},${co.id},'${MESES[mes]}')">✕</button>`:''}
       </td>`;
-      return `<td style="text-align:center"><span class="mes-dot debe">${MESES[mes]}</span></td>`;
+      return `<td style="text-align:center"><span class="mes-dot debe" title="Cuota pendiente: ${fmtM(cuota)}">${MESES[mes]}</span></td>`;
     }).join('');
     const editBtn = sesion?.rol === 'admin'
       ? `<button class="detalle-btn" style="font-size:11px;padding:3px 8px" onclick="abrirEditCondoById(${co.id})">✏️</button>`
@@ -534,7 +538,7 @@ async function loadCaja() {
   }
 
   const isAdmin = sesion?.rol === 'admin';
-  const catLabel = { cuota:'Cuota condómino',cuota_extra:'Cuota extraordinaria',ajuste_caja:'Ajuste caja chica', seguridad:'Seguridad', elevador:'Elevador', servicios:'Servicios', mantenimiento:'Mantenimiento', misc:'Misceláneo', otro:'Otro' };
+  const catLabel = { cuota:'Cuota condómino',cuota_extra:'Cuota extraordinaria',cuota_multiple:'Pago anticipado (varios meses)',ajuste_caja:'Ajuste caja chica', seguridad:'Seguridad', elevador:'Elevador', servicios:'Servicios', mantenimiento:'Mantenimiento', misc:'Misceláneo', otro:'Otro' };
 
   $id('caja-tabla').innerHTML = `
     <table style="width:100%;border-collapse:collapse;font-size:13px">
@@ -553,7 +557,7 @@ async function loadCaja() {
           const esIngreso = m.tipo === 'ingreso';
           const fecha     = m.fecha ? m.fecha.slice(0,10) : `${m.anio}-${String(m.mes).padStart(2,'0')}-01`;
           const concepto= m.categoria==='ajuste_caja' ? '🏦 Ajuste caja chica'
-            : esIngreso ? `<strong>${escapeHtml(m.unidad)}</strong> — ${escapeHtml(m.propietario)} ${m.categoria==='cuota_extra'?'· Extraordinaria':''}`
+            : esIngreso ? `<strong>${escapeHtml(m.unidad)}</strong> — ${escapeHtml(m.propietario)} ${m.categoria==='cuota_extra'?'· Extraordinaria':m.categoria==='cuota_multiple'?'· Anticipo varios meses':''}`
             : `${CATICONS2[m.categoria]||'📦'} ${escapeHtml(catLabel[m.categoria]||m.categoria)}${m.propietario?' · '+escapeHtml(m.propietario):''}`;
           const nota=m.notas?`<div style="font-size:11px;color:var(--text3);margin-top:2px">${escapeHtml(m.notas)}</div>`:'';
           const saldoColor = m.saldo_acumulado >= 0 ? 'var(--text)' : 'var(--red)';
@@ -583,6 +587,7 @@ async function borrarMovimiento(tabla, id, concepto) {
   if (!confirm(`¿Eliminar el movimiento:\n"${concepto}"?\n\nEsta acción actualizará el saldo y no se puede deshacer.`)) return;
   const endpoints = {
     pagos:        `/api/pagos/${id}`,
+    pagos_multiples: `/api/pagos/multiples/${id}`,
     gastos:       `/api/gastos/${id}`,
     gastos_misc:  `/api/gastos-misc/${id}`,
     gastos_pagos: `/api/gastos/pagos/${id}`,
@@ -593,7 +598,7 @@ async function borrarMovimiento(tabla, id, concepto) {
   if (r.ok) {
     loadCaja();
     loadDash();
-    if (tabla === 'pagos') { loadCuentas(); loadDeudores(); }
+    if (tabla === 'pagos' || tabla === 'pagos_multiples') { loadCuentas(); loadDeudores(); }
     showToast('🗑️ Movimiento eliminado');
   } else {
     showToast('Error al eliminar', false);
