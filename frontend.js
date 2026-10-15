@@ -2254,7 +2254,7 @@ window.openModal = function(id) {
 // ── GESTIÓN DE CONDÓMINOS (admin) ─────────
 let _condosAdminCache = [];
 async function loadCondosAdmin() {
-  const condos = await api('/api/condominios');
+  const condos = await api('/api/condominios?include_inactive=1');
   _condosAdminCache = Array.isArray(condos) ? condos : [];
   if (!Array.isArray(condos)) { showToast('No se pudo consultar la lista de condóminos.', false); return; }
   $id('condos-admin-list').innerHTML = `
@@ -2268,7 +2268,11 @@ async function loadCondosAdmin() {
               <td>${escapeHtml(c.propietario)}</td>
               <td style="font-family:'DM Sans',sans-serif;font-variant-numeric:tabular-nums">${fmtM(c.cuota_mensual)}</td>
               <td style="font-family:'DM Sans',sans-serif;font-variant-numeric:tabular-nums;color:var(--blue)">${c.indiviso}%</td>
-              <td><button class="detalle-btn" onclick="abrirEditCondoById(${c.id})">✏️ Editar</button></td>
+              <td style="white-space:nowrap">${c.activo ?
+  `<button class="detalle-btn" onclick="abrirEditCondoById(${c.id})">✏️ Editar</button>
+  <button class="detalle-btn" style="color:var(--red)" onclick="borrarCondo(${c.id})">🗑️ Eliminar</button>` :
+  `<span class="badge bo">Inactivo</span> <button class="detalle-btn" onclick="reactivarCondo(${c.id})">↩️ Reactivar</button>`}
+</td>
             </tr>`).join('')}
         </tbody>
       </table>
@@ -2280,7 +2284,29 @@ function abrirEditCondoById(id) {
     condosCache.find(item => item.id === id);
   if (co) abrirEditCondo(co.id, co.unidad, co.propietario, co.email || '', co.telefono || '', co.cuota_mensual);
 }
+function abrirNuevoCondo() {
+  $id('ec-id').value='';
+  $id('ec-titulo').textContent='Agregar despacho';
+  for(const id of ['ec-unidad','ec-prop','ec-email','ec-tel','ec-cuota'])$id(id).value='';
+  openModal('modal-edit-condo');
+}
+async function borrarCondo(id) {
+ const co=_condosAdminCache.find(c=>c.id===id);
+ if(!co||!confirm(`¿Eliminar el despacho ${co.unidad}? Si tiene historia se desactivará conservando pagos.`))return;
+ const r=await api(`/api/condominios/${id}`,{method:'DELETE'});
+ if(!r.ok){showToast(r.error||'No se pudo eliminar',false);return;}
+ await Promise.all([loadCondosAdmin(),loadCuentas(),loadUnidades()]);
+ loadDash();loadDeudores();
+ showToast(r.desactivado?'Despacho desactivado; historial conservado':'✓ Despacho eliminado');
+}
+async function reactivarCondo(id) {
+ const r=await api(`/api/condominios/${id}/reactivar`,{method:'PUT'});
+ if(!r.ok){showToast(r.error||'No se pudo reactivar',false);return;}
+ await Promise.all([loadCondosAdmin(),loadCuentas(),loadUnidades()]);
+ loadDash();showToast('✓ Despacho reactivado');
+}
 function abrirEditCondo(id, unidad, prop, email, tel, cuota) {
+  $id('ec-titulo').textContent='Editar condómino';
   $id('ec-id').value     = id;
   $id('ec-unidad').value = unidad;
   $id('ec-prop').value   = prop;
@@ -2291,15 +2317,19 @@ function abrirEditCondo(id, unidad, prop, email, tel, cuota) {
 }
 
 async function guardarCondo() {
-  const r = await api(`/api/condominios/${$id('ec-id').value}`, {
-    method: 'PUT',
-    body: JSON.stringify({
-      unidad: $id('ec-unidad').value, propietario: $id('ec-prop').value,
-      email: $id('ec-email').value, telefono: $id('ec-tel').value,
-      cuota_mensual: $id('ec-cuota').value,
-    }),
-  });
-  if (r.ok) { closeModal('modal-edit-condo'); loadCondosAdmin(); loadCuentas(); loadDeudores(); showToast('✓ Condómino actualizado'); }
+ const id=$id('ec-id').value;
+ const body={unidad:$id('ec-unidad').value.trim(),propietario:$id('ec-prop').value.trim(),
+ email:$id('ec-email').value,telefono:$id('ec-tel').value,cuota_mensual:$id('ec-cuota').value};
+ if(!body.unidad||!body.propietario||!Number.isFinite(Number(body.cuota_mensual))||
+   Number(body.cuota_mensual)<0){showToast('Datos de despacho inválidos',false);return;}
+ const r=await api(id?`/api/condominios/${id}`:'/api/condominios',{
+  method:id?'PUT':'POST',body:JSON.stringify(body)
+ });
+ if(!r.ok){showToast(r.error||'No se pudo guardar',false);return;}
+ closeModal('modal-edit-condo');
+ await Promise.all([loadCondosAdmin(),loadCuentas(),loadUnidades()]);
+ loadDash();loadDeudores();
+ showToast(id?'✓ Condómino actualizado':'✓ Despacho agregado');
 }
 
 // ── INIT ──────────────────────────────────
