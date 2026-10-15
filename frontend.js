@@ -374,8 +374,8 @@ async function loadDash() {
       <div class="ldot ${dcol[a.tipo] || ''}" style="margin-top:4px;flex-shrink:0"></div>
       <div style="flex:1;min-width:0">
         <div style="font-size:11px;color:var(--text3);font-family:'DM Sans',sans-serif;font-variant-numeric:tabular-nums;margin-bottom:2px">${a.created_at?.slice(0,10) || ''} · ${tiLabel[a.tipo] || a.tipo}</div>
-        <div style="font-size:14px;font-weight:700;line-height:1.3;margin-bottom:4px">${a.titulo}</div>
-        ${a.contenido ? `<div style="font-size:13px;color:var(--text2);line-height:1.55">${a.contenido.slice(0,120)}${a.contenido.length>120?'…':''}</div>` : ''}
+        <div style="font-size:14px;font-weight:700;line-height:1.3;margin-bottom:4px">${escapeHtml(a.titulo)}</div>
+        ${a.contenido ? `<div style="font-size:13px;color:var(--text2);line-height:1.55">${escapeHtml(a.contenido.slice(0,120))}${a.contenido.length>120?'…':''}</div>` : ''}
       </div>
     </div>`).join('')
     + `<div style="text-align:center;margin-top:12px"><a href="#" onclick="go('avisos',null);return false" style="font-size:13px;color:var(--blue);font-weight:600">Ver todos los avisos →</a></div>`
@@ -390,7 +390,7 @@ async function loadCuentas() {
 
   // Poblar select de pagos
   $id('pago-condo').innerHTML = condos.map(c =>
-    `<option value="${c.id}">${c.unidad} — ${c.propietario}</option>`
+    `<option value="${c.id}">${escapeHtml(c.unidad)} — ${escapeHtml(c.propietario)}</option>`
   ).join('');
 
   // Encabezados de meses
@@ -404,18 +404,18 @@ async function loadCuentas() {
       const esFuturo = anio > now.getFullYear() || (anio === now.getFullYear() && mes > now.getMonth() + 1);
       if (esFuturo) return `<td style="text-align:center"><span class="mes-dot futuro">—</span></td>`;
       if (pago) return `<td style="text-align:center">
-        <span class="mes-dot pagado" title="${fmtM(pago.monto)} · ${pago.numero_recibo || ''}">✓</span>
-        ${sesion?.rol === 'admin' ? `<br><button class="btn btn-r" style="font-size:10px;padding:2px 6px;margin-top:2px;line-height:1" onclick="borrarPago(${pago.id},'${co.propietario}','${MESES[mes]}')">✕</button>` : ''}
+        <span class="mes-dot pagado" title="${fmtM(pago.monto)} · ${escapeHtml(pago.numero_recibo || '')}">✓</span>
+        ${sesion?.rol === 'admin' ? `<br><button class="btn btn-r" style="font-size:10px;padding:2px 6px;margin-top:2px;line-height:1" onclick="borrarPagoCondo(${pago.id},${co.id},'${MESES[mes]}')">✕</button>` : ''}
       </td>`;
       return `<td style="text-align:center"><span class="mes-dot debe">${MESES[mes]}</span></td>`;
     }).join('');
     const editBtn = sesion?.rol === 'admin'
-      ? `<button class="detalle-btn" style="font-size:11px;padding:3px 8px" onclick="abrirEditCondo(${co.id},'${(co.unidad||'').replace(/'/g,"\\'")}','${(co.propietario||'').replace(/'/g,"\\'")}','${co.email||''}','${co.telefono||''}',${co.cuota_mensual})">✏️</button>`
+      ? `<button class="detalle-btn" style="font-size:11px;padding:3px 8px" onclick="abrirEditCondoById(${co.id})">✏️</button>`
       : '';
     return `
       <tr>
-        <td><span class="badge bb" style="font-family:'DM Sans',sans-serif;font-variant-numeric:tabular-nums">${co.unidad}</span></td>
-        <td><strong>${co.propietario}</strong> ${editBtn}</td>
+        <td><span class="badge bb" style="font-family:'DM Sans',sans-serif;font-variant-numeric:tabular-nums">${escapeHtml(co.unidad)}</span></td>
+        <td><strong>${escapeHtml(co.propietario)}</strong> ${editBtn}</td>
         <td style="font-family:'DM Sans',sans-serif;font-variant-numeric:tabular-nums;font-size:12px">${fmtM(co.cuota_mensual)}</td>
         <td style="font-size:12px;color:var(--blue);font-family:'DM Sans',sans-serif;font-variant-numeric:tabular-nums">${co.indiviso}%</td>
         ${celdas}
@@ -438,6 +438,10 @@ async function loadCuentas() {
   if (sesion?.rol === 'admin') $id('btn-reg-pago').style.display = '';
 }
 
+async function borrarPagoCondo(id, condoId, mes) {
+  const condo = condosCache.find(item => item.id === condoId);
+  return borrarPago(id, condo?.propietario || 'la unidad', mes);
+}
 async function borrarPago(id, propietario, mes) {
   if (!confirm(`¿Eliminar el pago de ${propietario} de ${mes}?\nEsta acción no se puede deshacer.`)) return;
   const r = await api(`/api/pagos/${id}`, { method: 'DELETE' });
@@ -1165,25 +1169,26 @@ async function abrirVotar(id) {
   const yaVotaron = new Set((v.votos || []).map(vt => vt.despacho));
   $id('despacho-grid').innerHTML = DESPACHOS.map(d => {
     const yv = yaVotaron.has(d);
-    return `<div class="desp-opt ${yv ? 'ya-voto' : ''}" onclick="${yv ? '' : `selDesp('${d}')`}">
+    return `<div class="desp-opt ${yv ? 'ya-voto' : ''}" onclick="${yv ? '' : `selDesp(this,'${d}')`}">
       <div>${d}</div>${yv ? '<div style="font-size:9px;color:var(--green)">✓ Votó</div>' : ''}
     </div>`;
   }).join('');
-  $id('opciones-voto').innerHTML = v.opciones.map(o =>
-    `<div class="opcion-voto" onclick="selOp(this,'${o.replace(/'/g,"\\'")}')"><div class="op-radio"></div><span>${o}</span></div>`
+  $id('opciones-voto').innerHTML = v.opciones.map((o, i) =>
+    `<div class="opcion-voto" onclick="selOp(this,${i})"><div class="op-radio"></div><span>${escapeHtml(o)}</span></div>`
   ).join('');
   initCanvas(); openModal('modal-votar');
 }
 
-function selDesp(d) {
-  document.querySelectorAll('.desp-opt:not(.ya-voto)').forEach(el => el.classList.remove('selected'));
-  event.currentTarget.classList.add('selected');
+function selDesp(el, d) {
+  document.querySelectorAll('.desp-opt:not(.ya-voto)').forEach(item => item.classList.remove('selected'));
+  el.classList.add('selected');
   $id('v-despacho').value = d;
 }
-function selOp(el, op) {
-  document.querySelectorAll('.opcion-voto').forEach(o => o.classList.remove('selected'));
+function selOp(el, index) {
+  if (!votActiva || !Number.isInteger(index) || index < 0 || index >= votActiva.opciones.length) return;
+  document.querySelectorAll('.opcion-voto').forEach(item => item.classList.remove('selected'));
   el.classList.add('selected');
-  $id('v-opcion').value = op;
+  $id('v-opcion').value = votActiva.opciones[index];
 }
 
 async function emitirVoto() {
@@ -2143,8 +2148,11 @@ window.openModal = function(id) {
 };
 
 // ── GESTIÓN DE CONDÓMINOS (admin) ─────────
+let _condosAdminCache = [];
 async function loadCondosAdmin() {
   const condos = await api('/api/condominios');
+  _condosAdminCache = Array.isArray(condos) ? condos : [];
+  if (!Array.isArray(condos)) { showToast('No se pudo consultar la lista de condóminos.', false); return; }
   $id('condos-admin-list').innerHTML = `
     <div class="tw">
       <table>
@@ -2152,17 +2160,22 @@ async function loadCondosAdmin() {
         <tbody>
           ${condos.map(c => `
             <tr>
-              <td><span class="badge bb">${c.unidad}</span></td>
-              <td>${c.propietario}</td>
+              <td><span class="badge bb">${escapeHtml(c.unidad)}</span></td>
+              <td>${escapeHtml(c.propietario)}</td>
               <td style="font-family:'DM Sans',sans-serif;font-variant-numeric:tabular-nums">${fmtM(c.cuota_mensual)}</td>
               <td style="font-family:'DM Sans',sans-serif;font-variant-numeric:tabular-nums;color:var(--blue)">${c.indiviso}%</td>
-              <td><button class="detalle-btn" onclick="abrirEditCondo(${c.id},'${c.unidad}','${c.propietario.replace(/'/g,"\\'")}','${c.email||''}','${c.telefono||''}',${c.cuota_mensual})">✏️ Editar</button></td>
+              <td><button class="detalle-btn" onclick="abrirEditCondoById(${c.id})">✏️ Editar</button></td>
             </tr>`).join('')}
         </tbody>
       </table>
     </div>`;
 }
 
+function abrirEditCondoById(id) {
+  const co = _condosAdminCache.find(item => item.id === id) ||
+    condosCache.find(item => item.id === id);
+  if (co) abrirEditCondo(co.id, co.unidad, co.propietario, co.email || '', co.telefono || '', co.cuota_mensual);
+}
 function abrirEditCondo(id, unidad, prop, email, tel, cuota) {
   $id('ec-id').value     = id;
   $id('ec-unidad').value = unidad;
