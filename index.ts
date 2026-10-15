@@ -852,7 +852,7 @@ app.get("/api/pagos/resumen", (c) => {
     const p = db.query(
       "SELECT monto FROM pagos WHERE condominio_id=? AND mes=? AND anio=? AND tipo_pago='ordinario'"
     ).get(co.id, mes, anio) as any;
-    if (p) { recaudado += p.monto; pagaron++; }
+    if(p){recaudado+=p.monto;if(p.monto>=co.cuota_mensual-0.009)pagaron++;}
   });
   const pendientes = condos.length - pagaron;
   const porcentaje = cuota_total > 0 ? Math.round((recaudado / cuota_total) * 100) : 0;
@@ -936,15 +936,18 @@ app.get("/api/pagos/deudores", (c) => {
   const result: any[] = [];
   condos.forEach((co: any) => {
     if (mesInicio > 12) return; // año anterior a 2026, ignorar
-    const pagos = db.query(
-      "SELECT mes FROM pagos WHERE condominio_id=? AND anio=? AND tipo_pago='ordinario'"
-    ).all(co.id, anio) as any[];
-    const meses_sin_pagar: number[] = [];
-    for (let m = mesInicio; m <= maxM; m++)
-      if (!pagos.find((p: any) => p.mes === m)) meses_sin_pagar.push(m);
-    if (meses_sin_pagar.length > 0)
-      result.push({ ...(esAdmin ? co : { id:co.id, unidad:co.unidad, propietario:co.propietario, cuota_mensual:co.cuota_mensual }),
-        meses_sin_pagar, adeudo: meses_sin_pagar.length * co.cuota_mensual });
+    const pagos=db.query("SELECT mes,monto FROM pagos WHERE condominio_id=? AND anio=? AND tipo_pago='ordinario'").all(co.id,anio) as any[];
+    const faltantes_mes:{mes:number;pagado:number;pendiente:number}[]=[];
+    for(let m=mesInicio;m<=maxM;m++){
+      const pagado=pagos.find((p:any)=>p.mes===m)?.monto??0;
+      const pendiente=Math.max(0,Math.round((co.cuota_mensual-pagado)*100)/100);
+      if(pendiente>=0.01)faltantes_mes.push({mes:m,pagado,pendiente});
+    }
+    if(faltantes_mes.length){
+      const adeudo=faltantes_mes.reduce((sum,x)=>sum+x.pendiente,0);
+      result.push({...(esAdmin?co:{id:co.id,unidad:co.unidad,propietario:co.propietario,cuota_mensual:co.cuota_mensual}),
+        meses_sin_pagar:faltantes_mes.map(x=>x.mes),faltantes_mes,adeudo:Math.round(adeudo*100)/100});
+    }
   });
   const sortUnit = (u: string) => {
     const n = parseInt(u);
@@ -972,8 +975,9 @@ app.get("/api/pagos/estado-cuenta", (c) => {
     };
     return { ...detalleCondo, indiviso, meses: meses.map(({ mes, anio }) => {
       const pago = pagosMap[`${anio}-${mes}`] || null;
-      return { mes, anio, pago: !pago || esAdmin ? pago :
-        { id:pago.id, mes:pago.mes, anio:pago.anio, monto:pago.monto } };
+      const pendiente=Math.max(0,Math.round((co.cuota_mensual-(pago?.monto??0))*100)/100);
+      return {mes,anio,pendiente,estado:!pago?'pendiente':pendiente>0.009?'parcial':'pagado',
+        pago:!pago||esAdmin?pago:{id:pago.id,mes:pago.mes,anio:pago.anio,monto:pago.monto}};
     })};
   });
   return c.json({ condos: result, meses });
