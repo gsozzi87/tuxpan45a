@@ -533,7 +533,7 @@ await seed();
 const sessions = new Map<string, { userId: number; username: string; nombre: string; rol: string }>();
 
 function randomId() {
-  return Math.random().toString(36).slice(2) + Date.now().toString(36);
+  return crypto.randomUUID();
 }
 
 function getSession(c: any) {
@@ -606,7 +606,11 @@ app.post("/api/auth/login", async (c) => {
   if (!ok) return c.json({ ok: false, error: "Credenciales inválidas" }, 401);
   const sid = randomId();
   sessions.set(sid, { userId: user.id, username: user.username, nombre: user.nombre, rol: user.rol });
-  setCookie(c, "sid", sid, { httpOnly: true, path: "/", maxAge: 86400 * 7 });
+  setCookie(c, "sid", sid, {
+    httpOnly: true, path: "/", maxAge: 86400 * 7,
+    sameSite: "Lax",
+    secure: c.req.header("x-forwarded-proto") === "https" || c.req.url.startsWith("https://")
+  });
   return c.json({ ok: true, nombre: user.nombre, rol: user.rol });
 });
 
@@ -637,9 +641,10 @@ app.get("/api/condominios", (c) => {
     ).all(co.id, anio) as any[];
     const meses_pagados = pagos.map((p: any) => p.mes);
     const now = new Date();
-    const maxM = anio < now.getFullYear() ? 12 : now.getMonth() + 1;
+    const maxM = anio > now.getFullYear() ? 0 : anio < now.getFullYear() ? 12 : now.getMonth() + 1;
     const meses_deudores: number[] = [];
-    for (let m = 1; m <= maxM; m++) if (!meses_pagados.includes(m)) meses_deudores.push(m);
+    const inicioCobro = anio < 2026 ? 13 : anio === 2026 ? 3 : 1;
+    for (let m = inicioCobro; m <= maxM; m++) if (!meses_pagados.includes(m)) meses_deudores.push(m);
     const adeudo_anio = meses_deudores.length * co.cuota_mensual;
     const indiviso = totalCuotas > 0 ? Math.round((co.cuota_mensual / totalCuotas) * 10000) / 100 : 0;
     return { ...co, indiviso, meses_pagados, meses_deudores, adeudo_anio };
@@ -687,7 +692,7 @@ app.get("/api/pagos/resumen", (c) => {
   const porcentaje = cuota_total > 0 ? Math.round((recaudado / cuota_total) * 100) : 0;
 
   // Gastos del mes (registrados)
-  const gastosRes = db.query("SELECT COALESCE(SUM(monto),0) as t FROM gastos WHERE mes=? AND anio=?").get(mes, anio) as any;
+  const gastosRes = db.query("SELECT COALESCE(SUM(monto),0) as t FROM gastos WHERE mes=? AND anio=? AND COALESCE(es_recurrente,0)=0").get(mes, anio) as any;
   const total_gastos = gastosRes?.t ?? 0;
 
   // Gastos misceláneos del mes
@@ -725,7 +730,7 @@ app.get("/api/pagos/resumen", (c) => {
       const p = db.query("SELECT monto FROM pagos WHERE condominio_id=? AND mes=? AND anio=? AND tipo_pago='ordinario'").get(co.id,m,a) as any;
       if(p) recMes += p.monto;
     });
-    const gMes   = (db.query("SELECT COALESCE(SUM(monto),0) as t FROM gastos WHERE mes=? AND anio=?").get(m,a) as any)?.t ?? 0;
+    const gMes   = (db.query("SELECT COALESCE(SUM(monto),0) as t FROM gastos WHERE mes=? AND anio=? AND COALESCE(es_recurrente,0)=0").get(m,a) as any)?.t ?? 0;
     const miMes  = (db.query("SELECT COALESCE(SUM(monto),0) as t FROM gastos_misc WHERE mes=? AND anio=?").get(m,a) as any)?.t ?? 0;
     const abMes  = (db.query("SELECT COALESCE(SUM(monto),0) as t FROM gastos_pagos WHERE mes=? AND anio=?").get(m,a) as any)?.t ?? 0;
     const ccMes  = db.query("SELECT * FROM caja_chica WHERE mes=? AND anio=?").get(m,a) as any;
@@ -758,7 +763,7 @@ app.get("/api/pagos/deudores", (c) => {
   const anio = Number(c.req.query("anio") ?? new Date().getFullYear());
   const condos = db.query("SELECT * FROM condominios WHERE activo=1").all() as any[];
   const now = new Date();
-  const maxM = anio < now.getFullYear() ? 12 : now.getMonth() + 1;
+  const maxM = anio > now.getFullYear() ? 0 : anio < now.getFullYear() ? 12 : now.getMonth() + 1;
   // Solo contar adeudos desde marzo 2026
   const mesInicio = (anio === 2026) ? 3 : (anio < 2026 ? 13 : 1); // <2026 = sin deudores
   const result: any[] = [];
@@ -792,7 +797,7 @@ app.get("/api/pagos/estado-cuenta", (c) => {
   const result = condos.map(co => {
     const pagosMap: Record<string, any> = {};
     const pagos = db.query(
-      "SELECT * FROM pagos WHERE condominio_id=? ORDER BY anio,mes"
+      "SELECT * FROM pagos WHERE condominio_id=? AND tipo_pago='ordinario' ORDER BY anio,mes"
     ).all(co.id) as any[];
     pagos.forEach((p: any) => { pagosMap[`${p.anio}-${p.mes}`] = p; });
     const indiviso = totalCuotas > 0 ? Math.round((co.cuota_mensual / totalCuotas) * 10000) / 100 : 0;
@@ -854,8 +859,8 @@ app.get("/api/movimientos", (c) => {
 
   // ── Egresos: gastos ordinarios ────────────────────────────────
   const gastosQ = mes
-    ? "SELECT id, fecha, monto, mes, anio, NULL as metodo_pago, NULL as referencia, notas, NULL as unidad, proveedor as propietario, 'egreso' as tipo, categoria, 'gastos' as tabla FROM gastos WHERE anio=? AND mes=? ORDER BY fecha, created_at"
-    : "SELECT id, fecha, monto, mes, anio, NULL as metodo_pago, NULL as referencia, notas, NULL as unidad, proveedor as propietario, 'egreso' as tipo, categoria, 'gastos' as tabla FROM gastos WHERE anio=? ORDER BY fecha, created_at";
+    ? "SELECT id, fecha, monto, mes, anio, NULL as metodo_pago, NULL as referencia, notas, NULL as unidad, proveedor as propietario, 'egreso' as tipo, categoria, 'gastos' as tabla FROM gastos WHERE anio=? AND mes=? AND COALESCE(es_recurrente,0)=0 ORDER BY fecha, created_at"
+    : "SELECT id, fecha, monto, mes, anio, NULL as metodo_pago, NULL as referencia, notas, NULL as unidad, proveedor as propietario, 'egreso' as tipo, categoria, 'gastos' as tabla FROM gastos WHERE anio=? AND COALESCE(es_recurrente,0)=0 ORDER BY fecha, created_at";
   const gastos = mes
     ? db.query(gastosQ).all(anio, mes) as any[]
     : db.query(gastosQ).all(anio) as any[];
@@ -1058,11 +1063,14 @@ app.get("/api/caja-chica", (c) => {
   const gastos_fijos = plantilla.reduce((s: number, g: any) => s + g.monto, 0);
   // Gastos reales registrados ese mes
   const gastos_reales = (db.query(
-    "SELECT COALESCE(SUM(monto),0) as t FROM gastos WHERE mes=? AND anio=?"
+    "SELECT COALESCE(SUM(monto),0) as t FROM gastos WHERE mes=? AND anio=? AND COALESCE(es_recurrente,0)=0"
   ).get(mes, anio) as any).t;
   // Gastos misceláneos del mes
   const gastos_misc = (db.query(
     "SELECT COALESCE(SUM(monto),0) as t FROM gastos_misc WHERE mes=? AND anio=?"
+  ).get(mes, anio) as any).t;
+  const abonos_fijos = (db.query(
+    "SELECT COALESCE(SUM(monto),0) as t FROM gastos_pagos WHERE mes=? AND anio=?"
   ).get(mes, anio) as any).t;
   // Registro manual de caja chica
   const registro = db.query("SELECT * FROM caja_chica WHERE mes=? AND anio=?").get(mes, anio) as any;
@@ -1070,11 +1078,11 @@ app.get("/api/caja-chica", (c) => {
   const deposito_extra = registro?.deposito_extra ?? 0;
   // Cuota total del mes
   const cuota_total = condos.reduce((s: number, co: any) => s + co.cuota_mensual, 0);
-  const ahorro_mes = recaudado - gastos_reales - gastos_misc;
+  const ahorro_mes = recaudado - gastos_reales - gastos_misc - abonos_fijos;
   const faltante_cobertura = gastos_fijos - recaudado;
   const saldo_caja = saldo_inicial + deposito_extra + ahorro_mes;
   return c.json({
-    recaudado, gastos_fijos, gastos_reales, gastos_misc,
+    recaudado, gastos_fijos, gastos_reales, gastos_misc, abonos_fijos,
     cuota_total, ahorro_mes, faltante_cobertura,
     saldo_inicial, deposito_extra, saldo_caja,
     registro: registro || null,
@@ -1604,7 +1612,7 @@ app.get("/api/votaciones", (c) => {
 app.get("/api/votaciones/:id", (c) => {
   const v = db.query("SELECT * FROM votaciones WHERE id=?").get(Number(c.req.param("id"))) as any;
   if (!v) return c.json({ error: "No encontrada" }, 404);
-  const votos = db.query("SELECT * FROM votos WHERE votacion_id=? ORDER BY created_at").all(v.id);
+  const votos = db.query("SELECT despacho,nombre_votante,opcion,created_at FROM votos WHERE votacion_id=? ORDER BY created_at").all(v.id);
   return c.json({ ...v, opciones: JSON.parse(v.opciones||"[]"), votos, resultados: getResultados(v.id) });
 });
 
