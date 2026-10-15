@@ -925,6 +925,11 @@ async function delPagoParcial(id) {
 // ── PAGOS ─────────────────────────────────
 let _unidadesParaPago=[];
 async function prepararRegistroPago() {
+  $id('pago-varios').checked=false;
+  togglePagoVarios(false);
+  const esteMes=`${anioActual()}-${String(mesActual()).padStart(2,'0')}`;
+  $id('pago-desde').value=esteMes;
+  $id('pago-hasta').value=`${anioActual()}-12`;
   selectPeriodo('pago-mes',mesActual());
   selectPeriodo('pago-anio',anioActual());
   $id('pago-fecha').value=hoyMX();
@@ -942,14 +947,47 @@ function autoMontoPago() {
   const condo=_unidadesParaPago.find(c=>c.id===id)||condosCache.find(c=>c.id===id);
   const el=$id('pago-monto'),info=$id('pago-cuota-sugerida');
   if(!condo){if(el)el.value='';if(info)info.textContent='Seleccioná un despacho';return;}
+  if($id('pago-varios').checked){actualizarPlanPago();return;}
   if(el)el.value=Number(condo.cuota_mensual).toFixed(2);
   if(info)info.textContent=`Cuota registrada: ${fmtM(condo.cuota_mensual)} · podés modificar el importe`;
+}
+function togglePagoVarios(recargar=true) {
+ const varios=$id('pago-varios').checked;
+ $id('pago-rango').style.display=varios?'':'none';
+ for(const id of ['pago-mes','pago-anio'])$id(id).closest('.form-g').style.display=varios?'none':'';
+ $id('pago-monto').readOnly=varios;
+ if(recargar)autoMontoPago();
+}
+async function actualizarPlanPago() {
+ if(!$id('pago-varios').checked)return;
+ const id=$id('pago-condo').value,desde=$id('pago-desde').value,hasta=$id('pago-hasta').value;
+ if(!id||!desde||!hasta)return;
+ const detalle=$id('pago-plan');
+ detalle.textContent='Calculando los meses pendientes…';
+ try {
+  const r=await api(`/api/condominios/${id}/cuotas?desde=${encodeURIComponent(desde)}&hasta=${encodeURIComponent(hasta)}`);
+  if(!r.ok)throw new Error(r.error||'Error de cálculo');
+  $id('pago-monto').value=r.total>0?r.total.toFixed(2):'';
+  $id('pago-cuota-sugerida').textContent='Importe exacto de cuotas pendientes; se registra un solo cobro.';
+  detalle.innerHTML=r.detalles.map(d=>
+    `<div style="display:flex;justify-content:space-between;gap:8px;padding:4px 0">
+      <span>${MESES_FULL[d.mes]} ${d.anio} · cuota ${fmtM(d.cuota)}</span>
+      <strong>${d.pendiente>0?fmtM(d.pendiente):'✓ Cubierto'}</strong></div>`).join('')+
+    `<div style="border-top:1px solid var(--border);margin-top:5px;padding-top:8px;font-weight:700">Total del cobro: ${fmtM(r.total)}</div>`;
+ }catch(e) {
+  $id('pago-monto').value='';
+  detalle.textContent=e.message||'No se pudo calcular la distribución';
+ }
 }
 async function registrarPago() {
   const fd = new FormData();
   fd.append('condominio_id', $id('pago-condo').value);
-  fd.append('mes',           $id('pago-mes').value);
-  fd.append('anio',          $id('pago-anio').value);
+  const varios=$id('pago-varios').checked;
+  if(varios){fd.append('desde',$id('pago-desde').value);fd.append('hasta',$id('pago-hasta').value);}
+  else {
+    fd.append('mes',$id('pago-mes').value);
+    fd.append('anio',$id('pago-anio').value);
+  }
   fd.append('monto',         $id('pago-monto').value);
   fd.append('fecha_pago',    $id('pago-fecha').value);
   fd.append('metodo_pago',   $id('pago-metodo').value);
@@ -961,16 +999,65 @@ async function registrarPago() {
   if(!Number.isFinite(Number($id('pago-monto').value))||Number($id('pago-monto').value)<=0) {
     showToast('Ingresá un monto válido',false);return;
   }
-  let r=await apiF('/api/pagos',fd);
-  if(r.requiere_confirmacion) {
+  let r=await apiF(varios?'/api/pagos/multiples':'/api/pagos',fd);
+  if(!varios&&r.requiere_confirmacion) {
     if(!confirm(`Ya existe un pago de este despacho para ${MESES_FULL[Number($id('pago-mes').value)]} ${$id('pago-anio').value}.\n¿Querés ACTUALIZAR el pago existente? Quedará registrado el cambio.`))return;
     fd.set('confirm_replace','1');
     r=await apiF('/api/pagos',fd);
   }
   if(r.ok) {
     closeModal('modal-pago');loadCuentas();loadDash();loadDeudores();loadCaja();
-    showToast(r.actualizado?'✓ Pago actualizado con historial':'✓ Pago registrado');
+    showToast(varios?`✓ Pago único registrado y aplicado a ${r.meses} meses`:
+      r.actualizado?'✓ Pago actualizado con historial':'✓ Pago registrado');
   } else showToast('Error: '+(r.error||'No se pudo registrar'),false);
+}
+
+// Reasignar un cobro existente sin mover su fecha ni duplicar entradas de caja.
+let _coberturaActual=null;
+async function abrirDistribucionPago(id) {
+ const r=await api(`/api/pagos/${id}/cobertura`);
+ if(!r.ok){showToast(r.error||'No se pudo abrir el pago',false);return;}
+ _coberturaActual=r.pago;
+ $id('cobertura-pago-id').value=id;
+ $id('cobertura-origen').textContent=`Cobro existente: ${fmtM(r.pago.monto)} · Fecha registrada: ${r.pago.fecha_pago||'Sin fecha'} · No se creará otro ingreso.`;
+ const app=r.aplicaciones||[];
+ const inicio=app.length?app[0]:{anio:r.pago.anio,mes:r.pago.mes};
+ const fin=app.length?app.at(-1):{anio:r.pago.anio,mes:r.pago.mes};
+ const clave=x=>`${x.anio}-${String(x.mes).padStart(2,'0')}`;
+ $id('cobertura-desde').value=clave(inicio);
+ $id('cobertura-hasta').value=clave(fin);
+ openModal('modal-cobertura');
+ await previewCobertura();
+}
+async function previewCobertura() {
+ if(!_coberturaActual)return;
+ const desde=$id('cobertura-desde').value,hasta=$id('cobertura-hasta').value;
+ const target=$id('cobertura-preview'),btn=$id('cobertura-guardar');
+ btn.disabled=true;target.textContent='Calculando distribución…';
+ if(!desde||!hasta)return;
+ try{
+  const r=await api(`/api/condominios/${_coberturaActual.condominio_id}/cuotas?desde=${encodeURIComponent(desde)}&hasta=${encodeURIComponent(hasta)}&excluir_pago=${_coberturaActual.id}`);
+  if(!r.ok)throw Error(r.error||'No se pudo calcular');
+  const completo=Math.abs(Number(_coberturaActual.monto)-r.total)<0.01;
+  target.innerHTML=r.detalles.map(d=>
+   `<div style="display:flex;justify-content:space-between;padding:3px 0"><span>${MESES_FULL[d.mes]} ${d.anio}</span><span>${fmtM(d.pendiente)}</span></div>`).join('')
+   +`<div style="font-weight:700;padding:9px 0;border-top:1px solid var(--border);margin-top:6px">
+      Total por aplicar: ${fmtM(r.total)} / Cobro registrado: ${fmtM(_coberturaActual.monto)}</div>`
+   +(!completo?'<div style="color:var(--red)">Los montos deben coincidir; ajustá el rango.</div>':'');
+  btn.disabled=!completo;
+ }catch(e){target.textContent=e.message;btn.disabled=true;}
+}
+async function guardarCobertura(){
+ if(!_coberturaActual)return;
+ const id=_coberturaActual.id;
+ if(!confirm('¿Redistribuir este pago entre los meses seleccionados? No se modifica el ingreso original.'))return;
+ const r=await api(`/api/pagos/${id}/cobertura`,{
+   method:'PUT',body:JSON.stringify({desde:$id('cobertura-desde').value,hasta:$id('cobertura-hasta').value})
+ });
+ if(!r.ok){showToast(r.error||'No se pudo redistribuir',false);return;}
+ closeModal('modal-cobertura');
+ loadCuentas();loadDash();loadDeudores();loadCaja();
+ showToast('✓ Meses cubiertos actualizados sin duplicar ingresos');
 }
 
 // ── GASTOS EXTRAORDINARIOS ────────────────
