@@ -33,6 +33,12 @@ async function apiPutF(u, fd) {
   const r = await fetch(u, { method: 'PUT', body: fd });
   return r.json();
 }
+function escapeHtml(value) {
+  return String(value ?? '').replace(/[&<>"']/g, char => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;',
+    '"': '&quot;', "'": '&#39;'
+  })[char]);
+}
 function $id(id) { return document.getElementById(id); }
 function qs(sel) { return document.querySelector(sel); }
 function openModal(id)  { $id(id).classList.add('open'); }
@@ -104,6 +110,7 @@ async function doLogin() {
     loadVotaciones();
     loadDash();
   } else {
+    $id('login-err').textContent = r.error || 'Usuario o contraseña incorrectos.';
     $id('login-err').style.display = 'block';
   }
 }
@@ -871,8 +878,8 @@ async function loadGastosExt() {
       if (p) return `
         <div class="presup-slot filled">
           <div style="font-size:11px;color:var(--text3);margin-bottom:4px">Presupuesto #${n}</div>
-          <div style="font-weight:600;font-size:13px">${p.empresa}</div>
-          <div style="font-size:12px;color:var(--text2)">Presentado por ${p.nombre_presentante} · Despacho ${p.despacho}</div>
+          <div style="font-weight:600;font-size:13px">${escapeHtml(p.empresa)}</div>
+          <div style="font-size:12px;color:var(--text2)">Presentado por ${escapeHtml(p.nombre_presentante)} · Despacho ${escapeHtml(p.despacho)}</div>
           <div style="font-family:'DM Sans',sans-serif;font-variant-numeric:tabular-nums;font-size:14px;color:var(--gold2);margin-top:4px">${fmtM(p.monto)}</div>
           ${p.archivo_path ? `<a href="${p.archivo_path}" target="_blank" class="btn btn-o btn-sm" style="margin-top:8px;display:inline-flex">📄 Ver archivo</a>` : ''}
         </div>`;
@@ -887,8 +894,8 @@ async function loadGastosExt() {
       <div class="gext-card">
         <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:14px;margin-bottom:14px">
           <div>
-            <div style="font-family:'Playfair Display',serif;font-size:17px;font-weight:700">${g.titulo}</div>
-            ${g.descripcion ? `<div style="font-size:13px;color:var(--text2);margin-top:4px;line-height:1.5">${g.descripcion}</div>` : ''}
+            <div style="font-family:'Playfair Display',serif;font-size:17px;font-weight:700">${escapeHtml(g.titulo)}</div>
+            ${g.descripcion ? `<div style="font-size:13px;color:var(--text2);margin-top:4px;line-height:1.5">${escapeHtml(g.descripcion)}</div>` : ''}
             <div style="display:flex;gap:10px;margin-top:8px;flex-wrap:wrap">
               <span class="badge bb">Inicio: ${MESES_FULL[g.mes_inicio]} ${g.anio_inicio}</span>
               <span class="badge bo">${g.num_cuotas} cuota${g.num_cuotas !== 1 ? 's' : ''}</span>
@@ -1081,8 +1088,8 @@ async function loadVotaciones() {
               ${v.tipo === 'presupuesto' ? `<span class="badge bpu">💎 Presupuesto</span>` : ''}
               ${v.fecha_cierre ? `<span style="font-size:11px;color:var(--text3);font-family:'DM Sans',sans-serif;font-variant-numeric:tabular-nums">Cierre: ${new Date(v.fecha_cierre).toLocaleString('es-MX')}</span>` : ''}
             </div>
-            <div style="font-family:'Playfair Display',serif;font-size:17px;font-weight:700;margin-bottom:5px">${v.titulo}</div>
-            ${v.descripcion ? `<div style="font-size:13px;color:var(--text2);line-height:1.5">${v.descripcion}</div>` : ''}
+            <div style="font-family:'Playfair Display',serif;font-size:17px;font-weight:700;margin-bottom:5px">${escapeHtml(v.titulo)}</div>
+            ${v.descripcion ? `<div style="font-size:13px;color:var(--text2);line-height:1.5">${escapeHtml(v.descripcion)}</div>` : ''}
           </div>
           <div style="display:flex;flex-direction:column;gap:7px;flex-shrink:0">
             ${!cerr ? `<button class="btn btn-g btn-sm" onclick="abrirVotar(${v.id})">✏️ Votar</button>` : ''}
@@ -1105,7 +1112,7 @@ async function loadVotaciones() {
               return `
                 <div style="margin-bottom:8px">
                   <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px">
-                    <span>${o.opcion}</span>
+                    <span>${escapeHtml(o.opcion)}</span>
                     <span style="font-weight:700;color:${COLORES[i % COLORES.length]}">${o.total} votos (${p}%)</span>
                   </div>
                   <div class="prog"><div class="prog-b" style="width:${p}%;background:${COLORES[i % COLORES.length]}"></div></div>
@@ -1225,7 +1232,7 @@ async function verResultados(id) {
         return `
           <div style="margin-bottom:13px">
             <div style="display:flex;justify-content:space-between;margin-bottom:5px;font-size:13px">
-              <span style="font-weight:600">${op}</span>
+              <span style="font-weight:600">${escapeHtml(op)}</span>
               <span style="font-weight:700;color:${col}">${cant} votos — ${p}%</span>
             </div>
             <div class="res-bar-track"><div class="res-bar-fill" style="width:${p}%;background:${col}">${p > 8 ? p + '%' : ''}</div></div>
@@ -1238,9 +1245,9 @@ async function verResultados(id) {
         <div style="display:flex;flex-wrap:wrap;gap:7px">
           ${(v.votos || []).map(vt => `
             <div style="background:var(--green-dim);border:1px solid rgba(76,175,135,.3);border-radius:8px;padding:7px 10px;font-size:12px">
-              <div style="font-weight:700;color:var(--green)">${vt.despacho}</div>
-              <div style="color:var(--text2);margin-top:2px">${vt.nombre_votante}</div>
-              <div style="color:var(--text3);font-size:11px;margin-top:2px">${vt.opcion}</div>
+              <div style="font-weight:700;color:var(--green)">${escapeHtml(vt.despacho)}</div>
+              <div style="color:var(--text2);margin-top:2px">${escapeHtml(vt.nombre_votante)}</div>
+              <div style="color:var(--text3);font-size:11px;margin-top:2px">${escapeHtml(vt.opcion)}</div>
             </div>`).join('')}
         </div>
       </div>
@@ -1274,23 +1281,23 @@ async function loadSits() {
       <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px;margin-bottom:10px">
         <div>
           <div style="font-size:11px;color:var(--text3);font-family:'DM Sans',sans-serif;font-variant-numeric:tabular-nums">SIT #${String(s.numero).padStart(2,'0')}</div>
-          <div style="font-weight:600;font-size:14px;margin-top:2px">${s.titulo}</div>
+          <div style="font-weight:600;font-size:14px;margin-top:2px">${escapeHtml(s.titulo)}</div>
         </div>
         <span class="badge" style="background:${urgCl[s.urgencia]}22;color:${urgCl[s.urgencia]};white-space:nowrap;flex-shrink:0">${urgLb[s.urgencia]}</span>
       </div>
-      <div style="font-size:13px;color:var(--text2);line-height:1.5;margin-bottom:10px">${s.descripcion}</div>
+      <div style="font-size:13px;color:var(--text2);line-height:1.5;margin-bottom:10px">${escapeHtml(s.descripcion)}</div>
       ${s.archivos?.length ? `
         <div class="photo-grid" style="margin-bottom:10px">
           ${s.archivos.slice(0,4).map(a => `
-            <div class="photo-item" onclick="verFoto('${a.archivo_path}','${a.descripcion||''}')">
+            <div class="photo-item" onclick="verFoto('${a.archivo_path}','${escapeHtml(a.descripcion)}')">
               <img src="${a.archivo_path}" onerror="this.style.display='none';this.parentNode.innerHTML+='📷'">
-              <div class="photo-cap">${a.es_resolucion ? '✅ Resolución' : a.descripcion||''}</div>
+              <div class="photo-cap">${escapeHtml(a.es_resolucion ? '✅ Resolución' : a.descripcion||'')}</div>
             </div>`).join('')}
         </div>` : ''}
       ${s.resolucion ? `
         <div style="margin-bottom:10px;padding:10px;background:var(--green-dim);border-radius:8px;border-left:3px solid var(--green);font-size:13px">
           <div style="font-size:11px;font-weight:700;color:var(--green);margin-bottom:4px">✅ Resolución (${s.fecha_resolucion||''})</div>
-          ${s.resolucion}
+          ${escapeHtml(s.resolucion)}
         </div>` : ''}
       <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
         <span class="badge ${estBg[s.estado]||'bo'}">${s.estado}</span>
@@ -1383,14 +1390,14 @@ async function loadMan() {
     : sol.map(s => `
         <div class="card" style="margin-bottom:11px">
           <div style="display:flex;align-items:center;gap:8px;margin-bottom:9px;flex-wrap:wrap">
-            <div class="sdot ${s.estado}"></div>
+            <div class="sdot ${escapeHtml(s.estado)}"></div>
             <span style="font-size:12px;color:var(--text3)">${s.estado === 'pendiente' ? '🕐 Pendiente' : s.estado === 'en-proceso' ? '⚙️ En proceso' : '✅ Resuelto'}</span>
-            <span class="badge" style="background:${pc[s.prioridad]}22;color:${pc[s.prioridad]}">${s.prioridad}</span>
-            ${s.despacho ? `<span class="badge bb" style="margin-left:auto">${s.despacho}</span>` : ''}
+            <span class="badge" style="background:${pc[s.prioridad]}22;color:${pc[s.prioridad]}">${escapeHtml(s.prioridad)}</span>
+            ${s.despacho ? `<span class="badge bb" style="margin-left:auto">${escapeHtml(s.despacho)}</span>` : ''}
             <span style="font-size:10px;font-family:'DM Sans',sans-serif;font-variant-numeric:tabular-nums;color:var(--text3)">${s.created_at?.slice(0,10)}</span>
           </div>
-          <div style="font-size:14px;font-weight:600;margin-bottom:4px">${s.descripcion}</div>
-          <div style="font-size:12px;color:var(--text3)">Por: ${s.autor}</div>
+          <div style="font-size:14px;font-weight:600;margin-bottom:4px">${escapeHtml(s.descripcion)}</div>
+          <div style="font-size:12px;color:var(--text3)">Por: ${escapeHtml(s.autor)}</div>
           ${s.foto_problema_path ? `
             <div style="margin-top:9px">
               <div class="photo-item" style="width:100px;height:80px" onclick="verFoto('${s.foto_problema_path}','Problema')">
@@ -1400,7 +1407,7 @@ async function loadMan() {
             </div>` : ''}
           ${s.respuesta ? `
             <div style="margin-top:9px;padding:10px;background:var(--green-dim);border-radius:8px;font-size:13px">
-              💬 ${s.respuesta}
+              💬 ${escapeHtml(s.respuesta)}
               ${s.foto_resolucion_path ? `
                 <div class="photo-item" style="width:80px;height:60px;margin-top:7px" onclick="verFoto('${s.foto_resolucion_path}','Resolución')">
                   <img src="${s.foto_resolucion_path}" style="width:100%;height:100%;object-fit:cover">
@@ -1437,6 +1444,7 @@ async function crearSolicitud() {
   if (foto) fd.append('foto', foto);
   const r = await apiF('/api/solicitudes', fd);
   if (r.ok) { closeModal('modal-solicitud'); loadMan(); showToast('✓ Solicitud enviada'); }
+  else showToast(r.error || 'No se pudo enviar la solicitud', false);
 }
 
 async function updSolEstado(id, estado) {
@@ -1478,7 +1486,7 @@ async function loadBit() {
             <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:12px;flex-wrap:wrap;gap:8px">
               <div>
                 <div style="font-family:'Playfair Display',serif;font-size:15px;font-weight:700">Semana ${s.semana_inicio} al ${s.semana_fin}</div>
-                <div style="font-size:12px;color:var(--text3);margin-top:2px">👷 ${s.personal}</div>
+                <div style="font-size:12px;color:var(--text3);margin-top:2px">👷 ${escapeHtml(s.personal)}</div>
               </div>
               <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
                 <span class="badge ${s.estado === 'completada' ? 'bg' : s.estado === 'en_progreso' ? 'bb' : 'bo'}">${s.estado}</span>
@@ -1495,9 +1503,9 @@ async function loadBit() {
                 ${s.areas.map(a => `
                   <div style="display:flex;align-items:center;gap:6px;background:${a.completada ? 'var(--green-dim)' : 'var(--bg3)'};border:1px solid ${a.completada ? 'rgba(76,175,135,.3)' : 'var(--border)'};border-radius:8px;padding:5px 10px;font-size:12px">
                     <span>${a.completada ? '✅' : '⬜'}</span>
-                    <span>${a.area_nombre || a.area}</span>
+                    <span>${escapeHtml(a.area_nombre || a.area)}</span>
                     ${a.foto_path ? `
-                      <span style="cursor:pointer;background:var(--gold-dim);border-radius:5px;padding:2px 6px;font-size:11px;color:var(--gold2)" onclick="verFoto('${a.foto_path}','${a.area_nombre || a.area}')">📷 Ver foto</span>
+                      <span style="cursor:pointer;background:var(--gold-dim);border-radius:5px;padding:2px 6px;font-size:11px;color:var(--gold2)" onclick="verFoto('${a.foto_path}','${escapeHtml(a.area_nombre || a.area)}')">📷 Ver foto</span>
                     ` : ''}
                   </div>`).join('')}
               </div>` : ''}
@@ -1741,28 +1749,33 @@ async function guardarElevador() {
 }
 
 // ── AVISOS ────────────────────────────────
+let _avisosCache = [];
 async function loadAvisos() {
   const av = await api('/api/avisos');
+  _avisosCache = av;
   const ti = { info:'📢', urgente:'🚨', comunicado:'📄', mantenimiento:'🔧' };
   $id('avisos-list').innerHTML = av.map(a => {
-    const tit = (a.titulo||'').replace(/'/g,"\\'");
-    const cnt = (a.contenido||'').replace(/'/g,"\\'").replace(/\n/g,'\\n');
     return `
     <div class="aviso-card ${a.urgente ? 'urgente' : ''}">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:7px;flex-wrap:wrap;gap:7px">
-        <div style="font-weight:600">${ti[a.tipo] || '📢'} ${a.autor}</div>
+        <div style="font-weight:600">${ti[a.tipo] || '📢'} ${escapeHtml(a.autor)}</div>
         <div style="display:flex;align-items:center;gap:8px">
           <div style="font-size:11px;color:var(--text3);font-family:'DM Sans',sans-serif;font-variant-numeric:tabular-nums">${a.created_at?.slice(0,10) || ''}</div>
           ${sesion?.rol === 'admin' ? `
-            <button class="btn btn-o btn-sm" onclick="editAviso(${a.id},'${tit}','${cnt}','${a.tipo}')">✏️ Editar</button>
+            <button class="btn btn-o btn-sm" onclick="editAvisoById(${a.id})">✏️ Editar</button>
             <button class="btn btn-r btn-sm" onclick="delAviso(${a.id})">✕</button>` : ''}
         </div>
       </div>
-      <div style="font-weight:600;margin-bottom:5px">${a.titulo}</div>
-      <div style="font-size:13px;color:var(--text2);line-height:1.6">${a.contenido}</div>
+      <div style="font-weight:600;margin-bottom:5px">${escapeHtml(a.titulo)}</div>
+      <div style="font-size:13px;color:var(--text2);line-height:1.6">${escapeHtml(a.contenido)}</div>
     </div>`;
   }).join('');
   $id('bdg-av').textContent = av.length;
+}
+
+function editAvisoById(id) {
+  const aviso = _avisosCache.find(item => item.id === id);
+  if (aviso) editAviso(aviso.id, aviso.titulo, aviso.contenido, aviso.tipo);
 }
 
 function editAviso(id, titulo, contenido, tipo) {
