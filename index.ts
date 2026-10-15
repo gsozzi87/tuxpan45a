@@ -132,8 +132,6 @@ db.run(`CREATE TABLE IF NOT EXISTS caja_chica (
 
 // Agregar columna es_variable si no existe (migración)
 try { db.run("ALTER TABLE gastos_plantilla ADD COLUMN es_variable INTEGER DEFAULT 0"); } catch(_) {}
-try { db.run("ALTER TABLE gastos_extraordinarios ADD COLUMN aporte_caja REAL DEFAULT 0"); } catch(_) {}
-try { db.run("ALTER TABLE gastos_pagos ADD COLUMN comprobante_path TEXT"); } catch(_) {}
 
 db.run(`CREATE TABLE IF NOT EXISTS gastos_pagos (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -159,6 +157,17 @@ db.run(`CREATE TABLE IF NOT EXISTS gastos_extraordinarios (
   estado TEXT DEFAULT 'activo',
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 )`);
+
+// Ejecutar migraciones después de crear las tablas: funcionan tanto en bases existentes
+// como en instalaciones nuevas. No se ignoran fallos distintos de columna duplicada.
+function addColumnIfMissing(table: string, column: string, definition: string) {
+  const columns = db.query(`PRAGMA table_info(${table})`).all() as { name: string }[];
+  if (!columns.some(c => c.name === column)) {
+    db.run(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+  }
+}
+addColumnIfMissing('gastos_extraordinarios', 'aporte_caja', 'REAL DEFAULT 0');
+addColumnIfMissing('gastos_pagos', 'comprobante_path', 'TEXT');
 
 db.run(`CREATE TABLE IF NOT EXISTS avisos (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -395,9 +404,7 @@ async function seed() {
   // ── Condóminos con cuotas reales ──
   const { c: cc } = db.query("SELECT COUNT(*) as c FROM condominios").get() as any;
   if (cc === 0) {
-    // Cuota total = suma de todas = 43910
-    // Indiviso = cuota_propia / 43910 * 100
-    const total = 43910;
+    // El indiviso se calcula con el total real de cuotas iniciales.
     const condos = [
       ["101","Manuel Vargas",1800],
       ["102","Alejandro Valladares",2000],
@@ -416,6 +423,7 @@ async function seed() {
       ["8vo piso","Centro Quirúrgico Tuxpan",5500],
       ["9no piso","Gastón Sozzi",5500],
     ];
+    const total = condos.reduce((sum, co) => sum + Number(co[2]), 0);
     const ins = db.prepare("INSERT INTO condominios (unidad,propietario,cuota_mensual,indiviso) VALUES (?,?,?,?)");
     condos.forEach(([u,p,q]) => {
       const indiviso = q > 0 ? Math.round((Number(q) / total) * 10000) / 100 : 0;
@@ -512,17 +520,8 @@ async function seed() {
     console.log("✓ Primer acta creada (folio 1)");
   }
 
-  // ── Limpieza de archivos de +1 año ──
-  cleanOldFiles();
-}
-
-function cleanOldFiles() {
-  const cutoff = new Date();
-  cutoff.setFullYear(cutoff.getFullYear() - 1);
-  // Limpiar registros de DB con archivos viejos y borrar físico
-  const oldRecibos = db.query("SELECT archivo_path FROM recibos WHERE created_at < ?").all(cutoff.toISOString()) as any[];
-  oldRecibos.forEach(r => { try { require("fs").unlinkSync(r.archivo_path); } catch {} });
-  db.run("DELETE FROM recibos WHERE created_at < ?", [cutoff.toISOString()]);
+  // No eliminar documentos automáticamente al iniciar. La retención y depuración
+  // deben realizarse mediante una política documentada y un respaldo verificable.
 }
 
 await seed();
@@ -1677,7 +1676,7 @@ const HTML = `<!DOCTYPE html>
 <script>if('serviceWorker'in navigator){window.addEventListener('load',()=>{navigator.serviceWorker.register('/sw.js').catch(()=>{});});}</script>
 <link rel='icon' type='image/png' sizes='192x192' href='/icon-192.png'>
 <link rel='icon' type='image/png' sizes='512x512' href='/icon-512.png'>
-<link href='https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;700;900&family=DM+Sans:wght@300;400;500;600&family=DM+Mono:wght@400;500&display=swap' rel='stylesheet'>
+<link href='https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;700;900&family=DM+Sans:wght@300;400;500;600;700&family=DM+Mono:wght@400;500&display=swap' rel='stylesheet'>
 <style>
 :root{
   --bg:#f5f3ee;--bg2:#fdfcf9;--bg3:#ece9e2;--card:#ffffff;
@@ -1724,7 +1723,7 @@ body{font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--text);min
 .stat::before{content:'';position:absolute;top:0;left:0;right:0;height:3px;background:var(--ac,var(--gold))}
 .stat:hover{transform:translateY(-2px);box-shadow:0 8px 28px rgba(0,0,0,.10)}
 .stat-lbl{font-size:9px;letter-spacing:2px;text-transform:uppercase;color:var(--text3);margin-bottom:8px}
-.stat-val{font-family:'Playfair Display',serif;font-size:28px;font-weight:700;color:var(--ac,var(--gold2));line-height:1}
+.stat-val{font-family:'DM Sans',sans-serif;font-size:28px;font-weight:700;font-variant-numeric:lining-nums tabular-nums;font-feature-settings:'lnum' 1,'tnum' 1;letter-spacing:-.02em;color:var(--ac,var(--gold2));line-height:1.15}
 .stat-sub{font-size:11px;color:var(--text3);margin-top:5px}
 .sec-hdr{display:flex;align-items:center;justify-content:space-between;margin-bottom:20px}
 .sec-title{font-family:'Playfair Display',serif;font-size:20px;font-weight:700}
@@ -1732,7 +1731,7 @@ body{font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--text);min
 .tw{overflow-x:auto;border-radius:var(--rs);border:1px solid var(--border)}
 table{width:100%;border-collapse:collapse}
 th{background:var(--bg3);font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:var(--text3);padding:10px 13px;text-align:left;font-weight:600}
-td{padding:11px 13px;border-top:1px solid var(--border);font-size:13px}
+td{padding:11px 13px;border-top:1px solid var(--border);font-size:13px;font-variant-numeric:tabular-nums}
 tr:hover td{background:rgba(0,0,0,.02)}
 .badge{display:inline-block;padding:3px 9px;border-radius:20px;font-size:11px;font-weight:600}
 .bg{background:var(--green-dim);color:var(--green)}.br{background:var(--red-dim);color:var(--red)}
