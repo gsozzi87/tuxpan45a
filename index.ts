@@ -923,6 +923,45 @@ app.put("/api/condominios/:id/reactivar",requireAdmin,c=>{
 // ════════════════════════════════════════════
 //  PAGOS
 // ════════════════════════════════════════════
+// Cuotas históricas y crédito por período; el dinero físico se registra una sola vez.
+function cuotaPeriodo(co:any,mes:number,anio:number):number {
+  const h=db.query(`SELECT monto FROM cuotas_historial WHERE condominio_id=? AND
+    (desde_anio<? OR (desde_anio=? AND desde_mes<=?))
+    ORDER BY desde_anio DESC,desde_mes DESC LIMIT 1`).get(co.id,anio,anio,mes) as any;
+  return h?.monto??co.cuota_mensual;
+}
+function pagosAcreditados(coId:number,mes:number,anio:number,excluirPagoId=0) {
+  const directos=(db.query(`SELECT COALESCE(SUM(p.monto),0) total FROM pagos p
+    WHERE p.condominio_id=? AND p.mes=? AND p.anio=? AND p.tipo_pago='ordinario'
+      AND p.id<>? AND NOT EXISTS(
+        SELECT 1 FROM pagos_aplicaciones a WHERE a.origen='pago' AND a.origen_id=p.id)`)
+    .get(coId,mes,anio,excluirPagoId) as any).total;
+  const aplicado=(db.query(`SELECT COALESCE(SUM(monto),0) total FROM pagos_aplicaciones
+    WHERE condominio_id=? AND mes=? AND anio=? AND NOT(origen='pago' AND origen_id=?)`)
+    .get(coId,mes,anio,excluirPagoId) as any).total;
+  return Math.round((directos+aplicado)*100)/100;
+}
+function verPlanMeses(co:any,desde:{mes:number;anio:number},hasta:{mes:number;anio:number},excluirPagoId=0){
+  const meses=rangoMeses(desde,hasta);
+  if(meses[0].anio===2026&&meses[0].mes<3)throw new Error('La cuenta empieza en marzo de 2026');
+  const detalles=meses.map(({mes,anio})=>{
+    const cuota=cuotaPeriodo(co,mes,anio);
+    const acreditado=pagosAcreditados(co.id,mes,anio,excluirPagoId);
+    return {mes,anio,cuota,acreditado,pendiente:Math.max(0,Math.round((cuota-acreditado)*100)/100)};
+  });
+  return {...crearDistribucion(detalles),detalles};
+}
+function leerPeriodo(text:any){
+  if(typeof text!=='string'||!/^\d{4}-(0[1-9]|1[0-2])$/.test(text))throw new Error('Seleccioná un mes válido');
+  const [anio,mes]=text.split('-').map(Number);
+  return {mes,anio};
+}
+function validarFechaPago(fecha:any){
+  if(typeof fecha!=='string'||!/^\d{4}-\d{2}-\d{2}$/.test(fecha)||
+      !Number.isFinite(new Date(fecha+'T12:00:00Z').getTime()))throw new Error('Fecha de pago inválida');
+  return fecha;
+}
+
 app.get("/api/pagos/resumen", (c) => {
   const mes  = Number(c.req.query("mes")  ?? mexicoPeriod().mes);
   const anio = Number(c.req.query("anio") ?? mexicoPeriod().anio);
@@ -1058,6 +1097,91 @@ app.get("/api/pagos/estado-cuenta", (c) => {
     })};
   });
   return c.json({ condos: result, meses });
+});
+
+
+app.get('/api/condominios/:id/cuotas',requireAdmin,c=>{
+  const co=db.query("SELECT * FROM condominios WHERE id=? AND activo=1").get(Number(c.req.param('id'))) as any;
+  if(!co)return c.json({ok:false,error:'Despacho no encontrado'},404);
+  try {
+    const desde=leerPeriodo(c.req.query('desde')),hasta=leerPeriodo(c.req.query('hasta'));
+    const detalles=rangoMeses(desde,hasta).map(({mes,anio})=>{
+      const cuota=cuotaPeriodo(co,mes,anio),acreditado=pagosAcreditados(co.id,mes,anio);
+      return {mes,anio,cuota,acreditado,pendiente:Math.max(0,Math.round((cuota-acreditado)*100)/100)};
+    });
+    const pendientes=detalles.filter(x=>x.pendiente>0);
+    return c.json({ok:true,detalles,total:pendientes.reduce((sum,x)=>sum+x.pendiente,0)});
+  }catch(e:any){return c.json({ok:false,error:e.message},400);}
+});
+
+app.post('/api/pagos/multiples',requireAdmin,async c=>{
+ try{
+  const b=await c.req.parseBody();
+  const id=Number(b.condominio_id),co=db.query("SELECT * FROM condominios WHERE id=? AND activo=1").get(id) as any;
+  if(!co)return c.json({ok:false,error:'Unidad no encontrada'},404);
+  const desde=leerPeriodo(b.desde),hasta=leerPeriodo(b.hasta),fecha_pago=validarFechaPago(b.fecha_pago);
+  const plan=verPlanMeses(co,desde,hasta);
+  if(centavos(Number(b.monto))!==centavos(plan.total))
+    return c.json({ok:false,error:`El pago debe ser ${plan.total.toFixed(2)} para cubrir los meses seleccionados. Actualizá la vista previa.`},409);
+  const comprobante_path=b.comprobante&&typeof b.comprobante!=='string'
+    ? await saveFile(b.comprobante,'comprobantes'):null;
+  const sess=(c as any).session;
+  let idPago=0;
+  db.transaction(()=>{
+    // Recalcular dentro de la transacción para prevenir pagos simultáneos duplicados.
+    const vigente=verPlanMeses(co,desde,hasta);
+    if(centavos(vigente.total)!==centavos(plan.total))throw new Error('Los saldos cambiaron. Actualizá la vista previa.');
+    const res=db.run(`INSERT INTO pagos_multiples
+      (condominio_id,monto,fecha_pago,metodo_pago,referencia,numero_recibo,notas,comprobante_path,registrado_por)
+      VALUES(?,?,?,?,?,?,?,?,?)`,
+      [id,plan.total,fecha_pago,String(b.metodo_pago||'').slice(0,100),String(b.referencia||'').slice(0,200),
+       String(b.numero_recibo||'').slice(0,100),String(b.notas||'').slice(0,4000),comprobante_path,sess.userId]);
+    idPago=Number(res.lastInsertRowid);
+    const ins=db.prepare("INSERT INTO pagos_aplicaciones(origen,origen_id,condominio_id,mes,anio,monto) VALUES ('multiple',?,?,?,?,?)");
+    for(const a of vigente.aplicaciones)ins.run(idPago,id,a.mes,a.anio,a.monto);
+    db.run("INSERT INTO pagos_historial(pago_id,condominio_id,mes,anio,tipo_pago,accion,despues_json,registrado_por) VALUES (?,?,?,?,?,?,?,?)",
+      [idPago,id,desde.mes,desde.anio,'multiple','alta_pago_multiple',JSON.stringify({monto:plan.total,fecha_pago,aplicaciones:vigente.aplicaciones}),sess.userId]);
+  })();
+  return c.json({ok:true,id:idPago,meses:plan.aplicaciones.length,monto:plan.total});
+ }catch(e:any){
+  if(e instanceof UploadValidationError)throw e;
+  return c.json({ok:false,error:e.message||'No se pudo registrar el pago múltiple'},400);
+ }
+});
+
+app.get('/api/pagos/:id/cobertura',requireAdmin,c=>{
+ const id=Number(c.req.param('id'));
+ const p=db.query("SELECT * FROM pagos WHERE id=? AND tipo_pago='ordinario'").get(id) as any;
+ if(!p)return c.json({ok:false,error:'Pago no encontrado'},404);
+ const aplic=db.query("SELECT mes,anio,monto FROM pagos_aplicaciones WHERE origen='pago' AND origen_id=? ORDER BY anio,mes").all(id);
+ return c.json({ok:true,pago:p,aplicaciones:aplic});
+});
+
+app.put('/api/pagos/:id/cobertura',requireAdmin,async c=>{
+ const id=Number(c.req.param('id')),b=await c.req.json();
+ const pago=db.query("SELECT * FROM pagos WHERE id=? AND tipo_pago='ordinario'").get(id) as any;
+ if(!pago)return c.json({ok:false,error:'Pago no encontrado'},404);
+ const co=db.query("SELECT * FROM condominios WHERE id=?").get(pago.condominio_id) as any;
+ if(!co)return c.json({ok:false,error:'Despacho inexistente'},404);
+ try{
+  const desde=leerPeriodo(b.desde),hasta=leerPeriodo(b.hasta);
+  const plan=verPlanMeses(co,desde,hasta,id);
+  if(centavos(plan.total)!==centavos(pago.monto))
+    return c.json({ok:false,error:`Los meses seleccionados requieren ${plan.total.toFixed(2)} y el pago original es de ${pago.monto.toFixed(2)}. No se modificó el cobro.`},409);
+  const anteriores=db.query("SELECT mes,anio,monto FROM pagos_aplicaciones WHERE origen='pago' AND origen_id=?").all(id);
+  db.transaction(()=>{
+    const vigente=verPlanMeses(co,desde,hasta,id);
+    if(centavos(vigente.total)!==centavos(pago.monto))throw new Error('La cobertura cambió; volvé a intentar');
+    db.run("DELETE FROM pagos_aplicaciones WHERE origen='pago' AND origen_id=?",[id]);
+    const ins=db.prepare("INSERT INTO pagos_aplicaciones(origen,origen_id,condominio_id,mes,anio,monto) VALUES ('pago',?,?,?,?,?)");
+    for(const x of vigente.aplicaciones)ins.run(id,pago.condominio_id,x.mes,x.anio,x.monto);
+    db.run("INSERT INTO pagos_historial(pago_id,condominio_id,mes,anio,tipo_pago,accion,antes_json,despues_json,registrado_por) VALUES (?,?,?,?,?,?,?,?,?)",
+      [id,pago.condominio_id,pago.mes,pago.anio,'ordinario','editar_cobertura',
+       JSON.stringify({monto:pago.monto,fecha_pago:pago.fecha_pago,aplicaciones:anteriores}),
+       JSON.stringify({monto:pago.monto,fecha_pago:pago.fecha_pago,aplicaciones:vigente.aplicaciones}),(c as any).session.userId]);
+  })();
+  return c.json({ok:true,aplicaciones:plan.aplicaciones,fecha_pago:pago.fecha_pago});
+ }catch(e:any){return c.json({ok:false,error:e.message},400);}
 });
 
 app.post("/api/pagos", requireAdmin, async (c) => {
