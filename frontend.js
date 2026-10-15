@@ -435,7 +435,7 @@ async function loadCuentas() {
 
   // Encabezados de meses
   const thMeses = meses.map(({ mes, anio }) =>
-    `<th style="text-align:center">${MESES[mes]}<br><span style="font-size:8px">${anio}</span></th>`
+    `<th data-periodo="${anio}-${mes}" style="text-align:center">${MESES[mes]}<span style="display:block;font-size:9px">${anio}</span></th>`
   ).join('');
 
   const rows = condos.map(co => {
@@ -478,6 +478,13 @@ async function loadCuentas() {
     </div>`;
 
   if (sesion?.rol === 'admin') $id('btn-reg-pago').style.display = '';
+  // En el estado de cuenta anual mantener todos los meses pero ubicar
+  // el mes corriente dentro del área visible al entrar.
+  const tabla=$id('cuenta-tabla')?.querySelector('.tw');
+  const periodo=`${anioActual()}-${mesActual()}`;
+  const columna=[...($id('cuenta-tabla')?.querySelectorAll('th[data-periodo]')||[])]
+    .find(x=>x.dataset.periodo===periodo);
+  if(tabla&&columna)tabla.scrollLeft=Math.max(0,columna.offsetLeft-tabla.clientWidth/2+columna.clientWidth/2);
 }
 
 async function borrarPagoCondo(id, condoId, mes) {
