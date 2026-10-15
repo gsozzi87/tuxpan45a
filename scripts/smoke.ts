@@ -57,6 +57,11 @@ async function main(){
  assert.equal(sept.body.monto,4100);
  assert.equal(sept.body.estado,'pagado');
  assert.equal(oct.body.monto,7528);
+ const libroSep=await req('/api/movimientos?mes=9&anio=2026');
+ assert(libroSep.body.movimientos.some((m:any)=>m.tabla==='gastos_pagos'&&m.monto===4100),
+   'El abono de luz de septiembre debe estar en el libro de caja');
+ const resumenSep=await req('/api/pagos/resumen?mes=9&anio=2026');
+ assert.equal(resumenSep.body.total_pagos_fijos,4100,'Dashboard y caja deben concordar en egresos');
  const create=await json('/api/condominios','POST',{unidad:'PRUEBA-CI',propietario:'Prueba temporal',cuota_mensual:5500});
  assert.equal(create.res.status,200,JSON.stringify(create.body));
  const id=create.body.id;
@@ -71,6 +76,17 @@ async function main(){
  assert.equal(p.res.status,200);
  const pagoDetalle=await req(`/api/condominios/${id}`);
  assert.equal(pagoDetalle.body.pagos.find((x:any)=>x.mes===10&&x.anio===2026)?.monto,5500);
+ const libroOct=await req('/api/movimientos?mes=10&anio=2026');
+ assert(libroOct.body.movimientos.some((m:any)=>m.tabla==='pagos'&&m.monto===5500));
+ const resumenOct=await req('/api/pagos/resumen?mes=10&anio=2026');
+ assert.equal(resumenOct.body.recaudado,
+   libroOct.body.movimientos.filter((m:any)=>m.tabla==='pagos'&&m.categoria==='cuota')
+   .reduce((sum:number,m:any)=>sum+m.monto,0));
+ const deposito=await json('/api/caja-chica','PUT',{mes:10,anio:2026,saldo_inicial:0,deposito_extra:300});
+ assert.equal(deposito.res.status,200);
+ const libroCaja=await req('/api/movimientos?mes=10&anio=2026');
+ assert(libroCaja.body.movimientos.some((m:any)=>m.categoria==='ajuste_caja'&&m.monto===300),
+   'Los depósitos manuales de caja deben reflejarse en el libro');
  const dropped=await req(`/api/condominios/${id}`,{method:'DELETE'});
  assert(dropped.body.desactivado,'Un despacho con pagos debe preservarse como inactivo');
  const empty=await json('/api/condominios','POST',{unidad:'PRUEBA-VACIA',propietario:'Temporal',cuota_mensual:0});
