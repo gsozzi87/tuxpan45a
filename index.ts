@@ -17,6 +17,7 @@ import { join, resolve, sep } from "path";
 import { UploadValidationError, validateUpload, MAX_UPLOAD_BYTES } from "./upload-policy";
 import { makeRateLimiter, eligibleUnit } from "./request-policy";
 import { parsePaymentInput, PaymentValidationError } from "./payment-policy";
+import { mexicoPeriod, estadoCuentaWindow } from "./date-period";
 
 // ── Directorios persistentes ──
 const UPLOAD_DIR = process.env.UPLOAD_DIR ?? "./uploads";
@@ -727,8 +728,8 @@ app.post("/api/auth/change-password", requireAuth, async (c) => {
 //  CONDÓMINOS
 // ════════════════════════════════════════════
 app.get("/api/condominios", requireAdmin, (c) => {
-  const mes  = Number(c.req.query("mes")  ?? new Date().getMonth() + 1);
-  const anio = Number(c.req.query("anio") ?? new Date().getFullYear());
+  const mes  = Number(c.req.query("mes")  ?? mexicoPeriod().mes);
+  const anio = Number(c.req.query("anio") ?? mexicoPeriod().anio);
   const condos = db.query("SELECT * FROM condominios WHERE activo=1 ORDER BY CASE WHEN CAST(unidad AS INTEGER) = 0 THEN 1 ELSE 0 END, CAST(unidad AS INTEGER), unidad").all() as any[];
   const totalCuotas = condos.reduce((s, co) => s + co.cuota_mensual, 0);
   const result = condos.map(co => {
@@ -736,8 +737,8 @@ app.get("/api/condominios", requireAdmin, (c) => {
       "SELECT mes FROM pagos WHERE condominio_id=? AND anio=? AND tipo_pago='ordinario'"
     ).all(co.id, anio) as any[];
     const meses_pagados = pagos.map((p: any) => p.mes);
-    const now = new Date();
-    const maxM = anio > now.getFullYear() ? 0 : anio < now.getFullYear() ? 12 : now.getMonth() + 1;
+    const now = mexicoPeriod();
+    const maxM = anio > now.anio ? 0 : anio < now.anio ? 12 : now.mes;
     const meses_deudores: number[] = [];
     const inicioCobro = anio < 2026 ? 13 : anio === 2026 ? 3 : 1;
     for (let m = inicioCobro; m <= maxM; m++) if (!meses_pagados.includes(m)) meses_deudores.push(m);
@@ -773,8 +774,8 @@ app.post("/api/condominios", requireAdmin, async (c) => {
 //  PAGOS
 // ════════════════════════════════════════════
 app.get("/api/pagos/resumen", (c) => {
-  const mes  = Number(c.req.query("mes")  ?? new Date().getMonth() + 1);
-  const anio = Number(c.req.query("anio") ?? new Date().getFullYear());
+  const mes  = Number(c.req.query("mes")  ?? mexicoPeriod().mes);
+  const anio = Number(c.req.query("anio") ?? mexicoPeriod().anio);
   const condos = db.query("SELECT * FROM condominios WHERE activo=1").all() as any[];
   let recaudado = 0, pagaron = 0, cuota_total = 0;
   condos.forEach((co: any) => {
@@ -857,10 +858,10 @@ app.get("/api/pagos/resumen", (c) => {
 
 app.get("/api/pagos/deudores", (c) => {
   const esAdmin = getSession(c)?.rol === 'admin';
-  const anio = Number(c.req.query("anio") ?? new Date().getFullYear());
+  const anio = Number(c.req.query("anio") ?? mexicoPeriod().anio);
   const condos = db.query("SELECT * FROM condominios WHERE activo=1").all() as any[];
-  const now = new Date();
-  const maxM = anio > now.getFullYear() ? 0 : anio < now.getFullYear() ? 12 : now.getMonth() + 1;
+  const now = mexicoPeriod();
+  const maxM = anio > now.anio ? 0 : anio < now.anio ? 12 : now.mes;
   // Solo contar adeudos desde marzo 2026
   const mesInicio = (anio === 2026) ? 3 : (anio < 2026 ? 13 : 1); // <2026 = sin deudores
   const result: any[] = [];
@@ -887,11 +888,7 @@ app.get("/api/pagos/deudores", (c) => {
 app.get("/api/pagos/estado-cuenta", (c) => {
   const esAdmin = getSession(c)?.rol === 'admin';
   const condos = db.query("SELECT * FROM condominios WHERE activo=1 ORDER BY CASE WHEN CAST(unidad AS INTEGER) = 0 THEN 1 ELSE 0 END, CAST(unidad AS INTEGER), unidad").all() as any[];
-  const meses = [
-    {mes:3,anio:2026},{mes:4,anio:2026},{mes:5,anio:2026},{mes:6,anio:2026},
-    {mes:7,anio:2026},{mes:8,anio:2026},{mes:9,anio:2026},{mes:10,anio:2026},
-    {mes:11,anio:2026},{mes:12,anio:2026},{mes:1,anio:2027},{mes:2,anio:2027},{mes:3,anio:2027},
-  ];
+  const meses = estadoCuentaWindow();
   const totalCuotas = condos.reduce((s, co) => s + co.cuota_mensual, 0);
   const result = condos.map(co => {
     const pagosMap: Record<string, any> = {};
@@ -990,7 +987,7 @@ app.delete("/api/pagos/:id", requireAdmin, (c) => {
 // ════════════════════════════════════════════
 app.get("/api/movimientos", (c) => {
   const mes  = c.req.query("mes")  ? Number(c.req.query("mes"))  : null;
-  const anio = Number(c.req.query("anio") ?? new Date().getFullYear());
+  const anio = Number(c.req.query("anio") ?? mexicoPeriod().anio);
 
   const mesWhere = mes ? "AND mes=?" : "";
   const mesArgs  = mes ? [anio, mes] : [anio];
@@ -1054,7 +1051,7 @@ app.get("/api/movimientos", (c) => {
 //  GASTOS ORDINARIOS
 // ════════════════════════════════════════════
 app.get("/api/gastos", (c) => {
-  const mes = c.req.query("mes"); const anio = c.req.query("anio") ?? "2026";
+  const mes = c.req.query("mes"); const anio = c.req.query("anio") ?? String(mexicoPeriod().anio);
   const gastos = mes
     ? db.query("SELECT * FROM gastos WHERE mes=? AND anio=? ORDER BY fecha DESC").all(Number(mes), Number(anio))
     : db.query("SELECT * FROM gastos WHERE anio=? ORDER BY fecha DESC").all(Number(anio));
@@ -1104,8 +1101,8 @@ app.delete("/api/gastos/plantilla/:id", requireAdmin, (c) => {
 // ── Pagos parciales a gastos fijos ──
 app.get("/api/gastos/plantilla/:id/pagos", (c) => {
   const id = Number(c.req.param("id"));
-  const mes  = Number(c.req.query("mes")  ?? new Date().getMonth() + 1);
-  const anio = Number(c.req.query("anio") ?? new Date().getFullYear());
+  const mes  = Number(c.req.query("mes")  ?? mexicoPeriod().mes);
+  const anio = Number(c.req.query("anio") ?? mexicoPeriod().anio);
   const plantilla = db.query("SELECT * FROM gastos_plantilla WHERE id=?").get(id) as any;
   if (!plantilla) return c.json({ error: "No encontrado" }, 404);
   const pagos = db.query(
@@ -1119,8 +1116,8 @@ app.get("/api/gastos/plantilla/:id/pagos", (c) => {
 app.post("/api/gastos/plantilla/:id/pagos", requireAdmin, async (c) => {
   const id = Number(c.req.param("id"));
   const b = await c.req.parseBody();
-  const mes   = Number(b.mes)   || (new Date().getMonth() + 1);
-  const anio  = Number(b.anio)  || new Date().getFullYear();
+  const mes   = Number(b.mes)   || (mexicoPeriod().mes);
+  const anio  = Number(b.anio)  || mexicoPeriod().anio;
   const monto = Number(b.monto);
   if (!monto || monto <= 0) return c.json({ error: "Monto inválido" }, 400);
   const plantilla = db.query("SELECT * FROM gastos_plantilla WHERE id=?").get(id) as any;
@@ -1176,15 +1173,15 @@ app.post("/api/gastos/generar-mes", requireAdmin, async (c) => {
 //  GASTOS MISCELÁNEOS
 // ════════════════════════════════════════════
 app.get("/api/gastos-misc", (c) => {
-  const mes  = Number(c.req.query("mes")  ?? new Date().getMonth() + 1);
-  const anio = Number(c.req.query("anio") ?? new Date().getFullYear());
+  const mes  = Number(c.req.query("mes")  ?? mexicoPeriod().mes);
+  const anio = Number(c.req.query("anio") ?? mexicoPeriod().anio);
   return c.json(db.query("SELECT * FROM gastos_misc WHERE mes=? AND anio=? ORDER BY created_at DESC").all(mes, anio));
 });
 
 app.post("/api/gastos-misc", requireAdmin, async (c) => {
   const b = await c.req.json();
-  const mes  = Number(b.mes  ?? new Date().getMonth() + 1);
-  const anio = Number(b.anio ?? new Date().getFullYear());
+  const mes  = Number(b.mes  ?? mexicoPeriod().mes);
+  const anio = Number(b.anio ?? mexicoPeriod().anio);
   db.run("INSERT INTO gastos_misc (concepto,monto,mes,anio,fecha,notas) VALUES (?,?,?,?,?,?)",
     [b.concepto, Number(b.monto), mes, anio,
      b.fecha || `${anio}-${String(mes).padStart(2,"0")}-01`, b.notas || null]);
@@ -1200,8 +1197,8 @@ app.delete("/api/gastos-misc/:id", requireAdmin, (c) => {
 //  CAJA CHICA
 // ════════════════════════════════════════════
 app.get("/api/caja-chica", (c) => {
-  const mes  = Number(c.req.query("mes")  ?? new Date().getMonth() + 1);
-  const anio = Number(c.req.query("anio") ?? new Date().getFullYear());
+  const mes  = Number(c.req.query("mes")  ?? mexicoPeriod().mes);
+  const anio = Number(c.req.query("anio") ?? mexicoPeriod().anio);
   // Recaudado del mes
   const condos = db.query("SELECT * FROM condominios WHERE activo=1").all() as any[];
   const recaudado = (db.query(
@@ -1241,8 +1238,8 @@ app.get("/api/caja-chica", (c) => {
 
 app.put("/api/caja-chica", requireAdmin, async (c) => {
   const b = await c.req.json();
-  const mes  = Number(b.mes  ?? new Date().getMonth() + 1);
-  const anio = Number(b.anio ?? new Date().getFullYear());
+  const mes  = Number(b.mes  ?? mexicoPeriod().mes);
+  const anio = Number(b.anio ?? mexicoPeriod().anio);
   db.run(`INSERT INTO caja_chica (mes,anio,saldo_inicial,deposito_extra,notas)
     VALUES (?,?,?,?,?)
     ON CONFLICT(mes,anio) DO UPDATE SET
