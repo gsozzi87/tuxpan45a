@@ -754,47 +754,89 @@ app.post("/api/auth/change-password", requireAuth, async (c) => {
 // ════════════════════════════════════════════
 //  CONDÓMINOS
 // ════════════════════════════════════════════
-app.get("/api/condominios", requireAdmin, (c) => {
-  const mes  = Number(c.req.query("mes")  ?? mexicoPeriod().mes);
-  const anio = Number(c.req.query("anio") ?? mexicoPeriod().anio);
-  const condos = db.query("SELECT * FROM condominios WHERE activo=1 ORDER BY CASE WHEN CAST(unidad AS INTEGER) = 0 THEN 1 ELSE 0 END, CAST(unidad AS INTEGER), unidad").all() as any[];
-  const totalCuotas = condos.reduce((s, co) => s + co.cuota_mensual, 0);
-  const result = condos.map(co => {
-    const pagos = db.query(
-      "SELECT mes FROM pagos WHERE condominio_id=? AND anio=? AND tipo_pago='ordinario'"
-    ).all(co.id, anio) as any[];
-    const meses_pagados = pagos.map((p: any) => p.mes);
-    const now = mexicoPeriod();
-    const maxM = anio > now.anio ? 0 : anio < now.anio ? 12 : now.mes;
-    const meses_deudores: number[] = [];
-    const inicioCobro = anio < 2026 ? 13 : anio === 2026 ? 3 : 1;
-    for (let m = inicioCobro; m <= maxM; m++) if (!meses_pagados.includes(m)) meses_deudores.push(m);
-    const adeudo_anio = meses_deudores.length * co.cuota_mensual;
-    const indiviso = totalCuotas > 0 ? Math.round((co.cuota_mensual / totalCuotas) * 10000) / 100 : 0;
-    return { ...co, indiviso, meses_pagados, meses_deudores, adeudo_anio };
-  });
-  return c.json(result);
+function validarUnidad(b: any) {
+ const unidad=typeof b.unidad==='string'?b.unidad.trim():'';
+ const propietario=typeof b.propietario==='string'?b.propietario.trim():'';
+ const cuota=Number(b.cuota_mensual);
+ if(!unidad||unidad.length>40||!propietario||propietario.length>160||
+    !Number.isFinite(cuota)||cuota<0||cuota>1_000_000||
+    (b.email&&typeof b.email!=='string')||(b.telefono&&typeof b.telefono!=='string')||
+    String(b.email||'').length>180||String(b.telefono||'').length>40)
+   return null;
+ return {unidad,propietario,cuota,email:b.email||null,telefono:b.telefono||null};
+}
+
+// Catálogo público de nombres, sin cuotas, propietarios ni datos de contacto.
+app.get("/api/unidades",c=>c.json((db.query(
+  "SELECT unidad FROM condominios WHERE activo=1 ORDER BY id"
+).all() as {unidad:string}[]).map(x=>x.unidad)));
+
+app.get("/api/condominios",requireAdmin,c=>{
+ const anio=Number(c.req.query("anio")??mexicoPeriod().anio);
+ const include=c.req.query("include_inactive")==='1';
+ const condos=db.query(`SELECT * FROM condominios ${include?'':'WHERE activo=1'}
+   ORDER BY CASE WHEN CAST(unidad AS INTEGER)=0 THEN 1 ELSE 0 END,CAST(unidad AS INTEGER),unidad`).all() as any[];
+ const activos=condos.filter(x=>x.activo);
+ const total=activos.reduce((sum,co)=>sum+co.cuota_mensual,0);
+ const now=mexicoPeriod(),maxM=anio>now.anio?0:anio<now.anio?12:now.mes;
+ return c.json(condos.map(co=>{
+   const meses_pagados=(db.query("SELECT mes FROM pagos WHERE condominio_id=? AND anio=? AND tipo_pago='ordinario'").all(co.id,anio) as any[]).map(p=>p.mes);
+   const meses_deudores:number[]=[];
+   const desde=anio===2026?3:1;
+   if(co.activo)for(let m=desde;m<=maxM;m++)if(!meses_pagados.includes(m))meses_deudores.push(m);
+   return {...co,indiviso:co.activo&&total>0?Math.round(co.cuota_mensual/total*10000)/100:0,
+     meses_pagados,meses_deudores,adeudo_anio:meses_deudores.length*co.cuota_mensual};
+ }));
 });
 
-app.get("/api/condominios/:id", requireAdmin, (c) => {
-  const co = db.query("SELECT * FROM condominios WHERE id=?").get(Number(c.req.param("id"))) as any;
-  if (!co) return c.json({ error: "No encontrado" }, 404);
-  const pagos = db.query("SELECT * FROM pagos WHERE condominio_id=? ORDER BY anio,mes").all(co.id);
-  return c.json({ ...co, pagos });
+app.get("/api/condominios/:id",requireAdmin,c=>{
+ const co=db.query("SELECT * FROM condominios WHERE id=?").get(Number(c.req.param("id"))) as any;
+ if(!co)return c.json({error:"Unidad no encontrada"},404);
+ const pagos=db.query("SELECT * FROM pagos WHERE condominio_id=? ORDER BY anio,mes").all(co.id);
+ return c.json({...co,pagos});
 });
 
-app.put("/api/condominios/:id", requireAdmin, async (c) => {
-  const b = await c.req.json();
-  db.run("UPDATE condominios SET unidad=?,propietario=?,email=?,telefono=?,cuota_mensual=? WHERE id=?",
-    [b.unidad, b.propietario, b.email || null, b.telefono || null, Number(b.cuota_mensual), Number(c.req.param("id"))]);
-  return c.json({ ok: true });
+app.put("/api/condominios/:id",requireAdmin,async c=>{
+ const id=Number(c.req.param("id")),b=validarUnidad(await c.req.json());
+ if(!b)return c.json({ok:false,error:"Datos de unidad o cuota inválidos"},400);
+ if(!db.query("SELECT id FROM condominios WHERE id=?").get(id))return c.json({ok:false,error:"Unidad no encontrada"},404);
+ const repetido=db.query("SELECT id FROM condominios WHERE unidad=? AND id<>?").get(b.unidad,id);
+ if(repetido)return c.json({ok:false,error:"Ya existe una unidad con este nombre"},409);
+ db.run("UPDATE condominios SET unidad=?,propietario=?,email=?,telefono=?,cuota_mensual=? WHERE id=?",
+   [b.unidad,b.propietario,b.email,b.telefono,b.cuota,id]);
+ return c.json({ok:true});
 });
 
-app.post("/api/condominios", requireAdmin, async (c) => {
-  const b = await c.req.json();
-  db.run("INSERT INTO condominios (unidad,propietario,email,telefono,cuota_mensual) VALUES (?,?,?,?,?)",
-    [b.unidad, b.propietario, b.email || null, b.telefono || null, Number(b.cuota_mensual)]);
-  return c.json({ ok: true });
+app.post("/api/condominios",requireAdmin,async c=>{
+ const b=validarUnidad(await c.req.json());
+ if(!b)return c.json({ok:false,error:"Datos de unidad o cuota inválidos"},400);
+ if(db.query("SELECT id FROM condominios WHERE unidad=?").get(b.unidad))
+   return c.json({ok:false,error:"El despacho ya existe"},409);
+ const x=db.run("INSERT INTO condominios(unidad,propietario,email,telefono,cuota_mensual) VALUES(?,?,?,?,?)",
+   [b.unidad,b.propietario,b.email,b.telefono,b.cuota]);
+ return c.json({ok:true,id:Number(x.lastInsertRowid)});
+});
+
+app.delete("/api/condominios/:id",requireAdmin,c=>{
+ const id=Number(c.req.param("id"));
+ const co=db.query("SELECT * FROM condominios WHERE id=?").get(id) as any;
+ if(!co)return c.json({ok:false,error:"Unidad no encontrada"},404);
+ const pagos=(db.query("SELECT COUNT(*) n FROM pagos WHERE condominio_id=?").get(id) as any).n;
+ const votos=(db.query("SELECT COUNT(*) n FROM votos WHERE despacho=?").get(co.unidad) as any).n;
+ const presupuestos=(db.query("SELECT COUNT(*) n FROM presupuestos WHERE despacho=?").get(co.unidad) as any).n;
+ const solicitudes=(db.query("SELECT COUNT(*) n FROM solicitudes WHERE despacho=?").get(co.unidad) as any).n;
+ if(pagos+votos+presupuestos+solicitudes>0) {
+   db.run("UPDATE condominios SET activo=0 WHERE id=?",[id]);
+   return c.json({ok:true,eliminado:false,desactivado:true,mensaje:"Unidad desactivada para preservar movimientos históricos."});
+ }
+ db.run("DELETE FROM condominios WHERE id=?",[id]);
+ return c.json({ok:true,eliminado:true});
+});
+
+app.put("/api/condominios/:id/reactivar",requireAdmin,c=>{
+ const id=Number(c.req.param("id"));
+ const x=db.run("UPDATE condominios SET activo=1 WHERE id=?",[id]);
+ return c.json({ok:x.changes>0});
 });
 
 // ════════════════════════════════════════════
