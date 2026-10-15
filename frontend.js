@@ -41,7 +41,11 @@ function escapeHtml(value) {
 }
 function $id(id) { return document.getElementById(id); }
 function qs(sel) { return document.querySelector(sel); }
-function openModal(id)  { $id(id).classList.add('open'); }
+function openModal(id) {
+ fechasModal(id);
+ $id(id).classList.add('open');
+ if(id==='modal-pago')prepararRegistroPago().catch(()=>showToast('No se pudieron cargar las cuotas',false));
+}
 function closeModal(id) { $id(id).classList.remove('open'); }
 function closeOv(e, id) { if (e.target === $id(id)) closeModal(id); }
 function showToast(msg, ok = true) {
@@ -59,7 +63,32 @@ function fmtM(n) {
   const v = Number(n);
   return Number.isFinite(v) ? mxn.format(v) : '—';
 }
-function anioActual() { return new Date().getFullYear(); }
+function periodoMX() {
+ const p=new Intl.DateTimeFormat('en-US',{timeZone:'America/Mexico_City',year:'numeric',month:'numeric',day:'numeric'}).formatToParts(new Date());
+ const n=t=>Number(p.find(x=>x.type===t)?.value);
+ return {anio:n('year'),mes:n('month'),dia:n('day')};
+}
+function anioActual(){return periodoMX().anio;}
+function mesActual(){return periodoMX().mes;}
+function hoyMX(){const p=periodoMX();return `${p.anio}-${String(p.mes).padStart(2,'0')}-${String(p.dia).padStart(2,'0')}`;}
+function selectPeriodo(id,val) {
+ const el=$id(id);if(!el)return;
+ const value=String(val);
+ if(![...el.options].some(o=>o.value===value))el.add(new Option(value,value));
+ el.value=value;
+}
+function periodoPagina(page) {
+ const ids=page==='dashboard'?['dash-mes','dash-anio']:page==='caja'?['caja-mes','caja-anio']:page==='gastos'?['fil-mes-g','fil-anio-g']:[];
+ ids.forEach(id=>selectPeriodo(id,id.includes('anio')?anioActual():mesActual()));
+}
+function anioGastos(){return Number($id('fil-anio-g')?.value)||anioActual();}
+function fechasModal(id) {
+ const selects={'modal-pago':['pago-mes','pago-anio'],'modal-gasto':['g-mes'],'modal-elevador':['elev-mes','elev-anio'],'modal-recibo':['rec-mes','rec-anio']};
+ (selects[id]||[]).forEach(campo=>selectPeriodo(campo,campo.includes('anio')?anioActual():mesActual()));
+ const fecha={'modal-pago':['pago-fecha'],'modal-gasto':['g-fecha'],'modal-misc':['misc-fecha']};
+ (fecha[id]||[]).forEach(campo=>{const el=$id(campo);if(el)el.value=hoyMX()});
+}
+
 function ppFotoReady(input) {
   const label = $id('pp-foto-status');
   if (label) label.textContent = input.files?.[0]?.name || 'Sin adjunto';
@@ -68,6 +97,7 @@ function esVencida(f) { return f && new Date() > new Date(f); }
 
 // ── Navegación ─────────────────────────────
 function go(p, b) {
+  if(!$id('page-'+p)?.classList.contains('active'))periodoPagina(p);
   document.querySelectorAll('.page').forEach(x => x.classList.remove('active'));
   document.querySelectorAll('.nav-item').forEach(x => x.classList.remove('active'));
   $id('page-' + p).classList.add('active');
@@ -203,12 +233,12 @@ function aplicarSesion() {
 
 // ── DASHBOARD ─────────────────────────────
 async function loadDash() {
-  const now = new Date();
+  const now = periodoMX();
   // Leer selectores; si no existen todavía, usar mes actual
   const selMes  = $id('dash-mes');
   const selAnio = $id('dash-anio');
-  const mes  = selMes  ? Number(selMes.value)  : (now.getMonth() + 1);
-  const anio = selAnio ? Number(selAnio.value) : now.getFullYear();
+  const mes  = selMes  ? Number(selMes.value)  : now.mes;
+  const anio = selAnio ? Number(selAnio.value) : now.anio;
 
   // Actualizar label de fecha
   const lbl = $id('dash-fecha-lbl');
@@ -593,7 +623,7 @@ async function loadGastos() {
     </div>`;
 
   // Cargar pagos del mes para cada gasto fijo
-  const mesFil = Number($id('fil-mes-g').value) || (new Date().getMonth() + 1);
+  const mesFil = Number($id('fil-mes-g').value) || (mesActual());
   const pagosPlantilla = await Promise.all(
     plantilla.map(g => api(`/api/gastos/plantilla/${g.id}/pagos?mes=${mesFil}&anio=${anioActual()}`))
   );
@@ -639,7 +669,7 @@ async function loadGastos() {
 }
 
 async function generarGastosMes() {
-  const m = $id('fil-mes-g').value || new Date().getMonth() + 1;
+  const m = $id('fil-mes-g').value || mesActual();
   const r = await api('/api/gastos/generar-mes', { method: 'POST', body: JSON.stringify({ mes: Number(m), anio: anioActual() }) });
   if (r.ok) { loadGastos(); showToast(`✓ ${r.creados} gastos generados del mes`); }
 }
@@ -685,7 +715,7 @@ function editPlantilla(id, concepto, categoria, monto, proveedor, es_variable) {
 }
 
 async function loadGastosMisc() {
-  const m = $id('fil-mes-g')?.value || (new Date().getMonth() + 1);
+  const m = $id('fil-mes-g')?.value || (mesActual());
   const misc = await api(`/api/gastos-misc?mes=${m}&anio=${anioActual()}`);
   const total = misc.reduce((s, x) => s + x.monto, 0);
   const el = $id('misc-list');
@@ -707,7 +737,7 @@ async function loadGastosMisc() {
 }
 
 async function registrarMisc() {
-  const m = $id('fil-mes-g')?.value || (new Date().getMonth() + 1);
+  const m = $id('fil-mes-g')?.value || (mesActual());
   const r = await api('/api/gastos-misc', {
     method: 'POST',
     body: JSON.stringify({
@@ -755,7 +785,7 @@ async function abrirPagosParciales(id, concepto, monto) {
   $id('pp-titulo').textContent  = concepto;
   $id('pp-total').textContent   = fmtM(monto);
   $id('pp-monto').value         = '';
-  $id('pp-fecha').value         = new Date().toISOString().slice(0,10);
+  $id('pp-fecha').value         = hoyMX();
   $id('pp-notas').value         = '';
   const fi = $id('pp-comprobante');
   if (fi) fi.value = '';
@@ -768,7 +798,7 @@ async function abrirPagosParciales(id, concepto, monto) {
 }
 
 async function refreshPagosParciales() {
-  const mes = Number($id('fil-mes-g').value) || (new Date().getMonth() + 1);
+  const mes = Number($id('fil-mes-g').value) || (mesActual());
   const info = await api(`/api/gastos/plantilla/${_ppId}/pagos?mes=${mes}&anio=${anioActual()}`);
   const pct  = _ppMonto > 0 ? Math.min(100, Math.round((info.pagado / _ppMonto) * 100)) : 0;
   const color = pct >= 100 ? 'var(--green)' : pct > 0 ? 'var(--gold)' : 'var(--red)';
@@ -802,7 +832,7 @@ async function refreshPagosParciales() {
 }
 
 async function guardarPagoParcial() {
-  const mes = Number($id('fil-mes-g').value) || (new Date().getMonth() + 1);
+  const mes = Number($id('fil-mes-g').value) || (mesActual());
   const fd  = new FormData();
   fd.append('monto', $id('pp-monto').value);
   fd.append('fecha', $id('pp-fecha').value);
@@ -1357,7 +1387,7 @@ async function guardarEditSit() {
   const estado     = $id('esit-estado').value;
   const resolucion = $id('esit-resolucion').value.trim();
   const fecha_resolucion = estado === 'resuelto'
-    ? ($id('esit-fecha-res').value || new Date().toISOString().slice(0,10))
+    ? ($id('esit-fecha-res').value || hoyMX())
     : '';
 
   if (!titulo) { showToast('El título no puede estar vacío'); return; }
@@ -1859,7 +1889,7 @@ async function loadActas() {
 function abrirNuevaActa() {
   $id('acta-edit-id').value = '';
   $id('acta-modal-titulo').textContent = '📝 Nueva Acta';
-  $id('acta-fecha').value     = new Date().toISOString().slice(0,10);
+  $id('acta-fecha').value     = hoyMX();
   $id('acta-temas').value     = '';
   $id('acta-asist').value     = '';
   $id('acta-num').value       = '';
@@ -2211,13 +2241,7 @@ $id('tb-date').textContent = new Date().toLocaleDateString('es-MX', {
   }
 })();
 
-// Inicializar selector de mes del dashboard al mes actual
-(function() {
-  const _now = new Date();
-  const _selM = $id('dash-mes');
-  const _selA = $id('dash-anio');
-  if (_selM) _selM.value = String(_now.getMonth() + 1);
-  if (_selA) _selA.value = String(_now.getFullYear());
-})();
+// Inicializar filtros en el mes corriente de Ciudad de México.
+['dashboard','caja','gastos'].forEach(periodoPagina);
 loadDash();
 
