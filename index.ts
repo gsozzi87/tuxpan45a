@@ -496,8 +496,8 @@ async function seed() {
     ins.run(["Seguridad e intendencia","seguridad",31100,"Sergio Guerrero",0]);
     ins.run(["Mantenimiento elevador","elevador",2000,"OTIS / Empresa",0]);
     ins.run(["Servicio de luz","servicios",4000,"CFE",1]);
-    ins.run(["Recolección de basura","servicios",1000,"Municipio"]);
-    ins.run(["Mantenimiento general","mantenimiento",2000,"Sergio Guerrero"]);
+    ins.run(["Recolección de basura","servicios",1000,"Municipio",0]);
+    ins.run(["Mantenimiento general","mantenimiento",2000,"Sergio Guerrero",0]);
     console.log("✓ Plantilla de gastos recurrentes creada");
   }
 
