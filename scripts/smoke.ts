@@ -6,7 +6,7 @@ import { join } from 'node:path';
 const root=mkdtempSync(join(tmpdir(),'tuxpan-smoke-'));
 const port=31873;
 const server=Bun.spawn({
-  cmd:['bun','run','index.ts'],stdout:'ignore',stderr:'ignore',
+  cmd:['bun','run','index.ts'],stdout:'pipe',stderr:'pipe',
   env:{...process.env,PORT:String(port),DB_PATH:join(root,'smoke.sqlite'),
     UPLOAD_DIR:join(root,'uploads'),INITIAL_ADMIN_PASSWORD:'CI-Test-Admin-123456'}
 });
@@ -33,7 +33,12 @@ async function main(){
   try{const r=await req('/api/unidades');if(r.res.ok){ready=true;break;}}catch{}
   await Bun.sleep(100);
  }
- assert(ready,'No arrancó el servidor con SQLite temporal');
+ if(!ready){
+  server.kill();
+  const err=await new Response(server.stderr).text();
+  const out=await new Response(server.stdout).text();
+  throw new Error('No arrancó el servidor con SQLite temporal:\n'+out+'\n'+err);
+ }
  const unidades=await req('/api/unidades');
  assert(!unidades.body.includes('201'),'201 no debe reintroducirse en instalación nueva');
  const login=await json('/api/auth/login','POST',{username:'admin',password:'CI-Test-Admin-123456'});
