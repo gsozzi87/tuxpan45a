@@ -1,0 +1,27 @@
+name: Validar TUXPAN 45A
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Sintaxis y compilación
+    runs-on: ubuntu-latest
+    steps:
+      - name: Obtener código
+        uses: actions/checkout@v4
+      - name: Instalar Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+      - name: Instalar dependencias
+        run: bun install
+      - name: Verificar JavaScript
+        run: bun build ./frontend.js --target browser --outdir /tmp/tuxpan-frontend
+      - name: Verificar TypeScript y backend
+        run: bun build ./index.ts --target bun --outdir /tmp/tuxpan-backend
