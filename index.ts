@@ -997,6 +997,10 @@ app.post("/api/pagos", requireAdmin, async (c) => {
     if (prev && b.tipo === 'extraordinario' && prev.gasto_ext_id !== b.gastoExtId) {
       return c.json({ ok:false, error:'Ya existe otro pago extraordinario para esa unidad y mes. No se reemplazó.' }, 409);
     }
+    if (prev && body.confirm_replace !== '1') {
+      return c.json({ok:false,requiere_confirmacion:true,
+        error:'Ya existe un pago de esta unidad y período. Para editarlo confirmá el reemplazo; quedará registrado en el historial.'},409);
+    }
 
     const comprobante_path = body.comprobante && typeof body.comprobante !== "string"
       ? await saveFile(body.comprobante, "comprobantes") : null;
