@@ -278,7 +278,7 @@ async function loadDash() {
 
   // Adeudo mes actual: condos que no pagaron este mes
   const deudores_mes   = deudores.filter(d => d.meses_sin_pagar.includes(mes));
-  const adeudo_mes     = deudores_mes.reduce((s, d) => s + d.cuota_mensual, 0);
+  const adeudo_mes = deudores_mes.reduce((s,d)=>s+(d.faltantes_mes?.find(x=>x.mes===mes)?.pendiente??d.cuota_mensual),0);
 
   // Adeudo total anual (todos los meses sin pagar)
   const adeudo_anio    = deudores.reduce((s, d) => s + d.adeudo, 0);
@@ -443,9 +443,11 @@ async function loadCuentas() {
       const now = new Date();
       const esFuturo = anio > now.getFullYear() || (anio === now.getFullYear() && mes > now.getMonth() + 1);
       if (esFuturo) return `<td style="text-align:center"><span class="mes-dot futuro">—</span></td>`;
-      if (pago) return `<td style="text-align:center">
-        <span class="mes-dot pagado" title="${fmtM(pago.monto)} · ${escapeHtml(pago.numero_recibo || '')}">✓</span>
-        ${sesion?.rol === 'admin' ? `<br><button class="btn btn-r" style="font-size:10px;padding:2px 6px;margin-top:2px;line-height:1" onclick="borrarPagoCondo(${pago.id},${co.id},'${MESES[mes]}')">✕</button>` : ''}
+      if(pago)return `<td style="text-align:center">
+        ${pago.monto < co.cuota_mensual-0.009 ?
+          `<span class="mes-dot" style="background:var(--gold-dim);color:var(--gold)" title="Abonado ${fmtM(pago.monto)} · Falta ${fmtM(co.cuota_mensual-pago.monto)}">◐</span><div style="font-size:9px;color:var(--gold)">Parcial</div>`:
+          `<span class="mes-dot pagado" title="${fmtM(pago.monto)} · ${escapeHtml(pago.numero_recibo||'')}">✓</span>`}
+        ${sesion?.rol==='admin'?`<br><button class="btn btn-r" style="font-size:10px;padding:2px 6px;margin-top:2px;line-height:1" onclick="borrarPagoCondo(${pago.id},${co.id},'${MESES[mes]}')">✕</button>`:''}
       </td>`;
       return `<td style="text-align:center"><span class="mes-dot debe">${MESES[mes]}</span></td>`;
     }).join('');
@@ -600,14 +602,14 @@ async function loadDeudores() {
     </div>
     <div class="tw">
       <table>
-        <thead><tr><th>Despacho</th><th>Propietario</th><th>Cuota</th><th>Meses sin pagar</th><th>Adeudo</th></tr></thead>
+        <thead><tr><th>Despacho</th><th>Propietario</th><th>Cuota</th><th>Meses pendientes (incluye abonos)</th><th>Adeudo</th></tr></thead>
         <tbody>
           ${d.map(x => `
             <tr>
               <td><span class="badge bb">${x.unidad}</span></td>
               <td><strong>${x.propietario}</strong></td>
               <td style="font-family:'DM Sans',sans-serif;font-variant-numeric:tabular-nums">${fmtM(x.cuota_mensual)}</td>
-              <td>${x.meses_sin_pagar.map(m => `<span class="badge br" style="margin-right:3px">${MESES[m]}</span>`).join('')}</td>
+              <td>${(x.faltantes_mes||[]).map(f=>`<span class="badge br" style="margin-right:3px" title="Pendiente: ${fmtM(f.pendiente)}">${MESES[f.mes]}${f.pagado>0?' · parcial':''}</span>`).join('')}</td>
               <td style="color:var(--red);font-weight:700;font-family:'DM Sans',sans-serif;font-variant-numeric:tabular-nums">${fmtM(x.adeudo)}</td>
             </tr>`).join('')}
         </tbody>
