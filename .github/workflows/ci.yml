@@ -25,3 +25,5 @@ jobs:
         run: bun build ./frontend.js --target browser --outdir /tmp/tuxpan-frontend
       - name: Verificar TypeScript y backend
         run: bun build ./index.ts --target bun --outdir /tmp/tuxpan-backend
+      - name: Ejecutar pruebas de seguridad de archivos
+        run: bun test tests/*.test.ts

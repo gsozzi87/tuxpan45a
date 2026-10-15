@@ -13,7 +13,8 @@ import { cors } from "hono/cors";
 import { getCookie, setCookie, deleteCookie } from "hono/cookie";
 import { Database } from "bun:sqlite";
 import { existsSync, mkdirSync } from "fs";
-import { join } from "path";
+import { join, resolve, sep } from "path";
+import { UploadValidationError, validateUpload, MAX_UPLOAD_BYTES } from "./upload-policy";
 
 // ── Directorios persistentes ──
 const UPLOAD_DIR = process.env.UPLOAD_DIR ?? "./uploads";
@@ -574,13 +575,18 @@ function requireManto(c: any, next: any) {
   return next();
 }
 
+const UPLOAD_SUBDIRS = new Set(['comprobantes', 'solicitudes', 'situaciones', 'elevador', 'bitacora', 'recibos', 'presupuestos']);
+const IMAGE_ONLY_SUBDIRS = new Set(['solicitudes', 'elevador', 'bitacora']);
 async function saveFile(file: any, subdir: string): Promise<string | null> {
   if (!file || typeof file === "string") return null;
-  const ext = (file.name || "file").split(".").pop() || "bin";
-  const fname = `${Date.now()}_${Math.random().toString(36).slice(2)}.${ext}`;
-  const path = join(UPLOAD_DIR, subdir, fname);
-  const buf = await file.arrayBuffer();
-  await Bun.write(path, buf);
+  if (!UPLOAD_SUBDIRS.has(subdir)) throw new UploadValidationError('Destino de archivo inválido.');
+  if (typeof file.size !== 'number' || file.size < 1 || file.size > MAX_UPLOAD_BYTES) {
+    throw new UploadValidationError('Archivo vacío o de más de 20 MB.', file.size > MAX_UPLOAD_BYTES ? 413 : 400);
+  }
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  const format = validateUpload(bytes, file.size, IMAGE_ONLY_SUBDIRS.has(subdir));
+  const fname = `${crypto.randomUUID()}.${format.ext}`;
+  await Bun.write(join(UPLOAD_DIR, subdir, fname), bytes);
   return `/uploads/${subdir}/${fname}`;
 }
 
@@ -595,14 +601,38 @@ function getResultados(votacion_id: number) {
 // ════════════════════════════════════════════
 const app = new Hono();
 app.use("/*", cors());
+app.onError((err, c) => {
+  if (err instanceof UploadValidationError) return c.json({ ok: false, error: err.message }, err.status);
+  console.error('Error interno de la API', err);
+  return c.json({ ok: false, error: 'Error interno del servidor' }, 500);
+});
 
-// ── Servir archivos del volumen ──
+// ── Servir archivos del volumen; nunca ejecutar HTML/JS subido ──
 app.get("/uploads/*", async (c) => {
-  const p = c.req.path.replace("/uploads/", "");
-  const full = join(UPLOAD_DIR, p);
-  if (!existsSync(full)) return c.text("Not found", 404);
-  const file = Bun.file(full);
-  return new Response(file);
+  const relativePath = c.req.path.slice("/uploads/".length);
+  const parts = relativePath.split("/");
+  if (parts.length !== 2 || !UPLOAD_SUBDIRS.has(parts[0]) ||
+      !/^[a-zA-Z0-9_.-]+$/.test(parts[1]) || parts[1] === "." || parts[1] === "..") {
+    return c.text("Not found", 404);
+  }
+  const root = resolve(UPLOAD_DIR);
+  const full = resolve(root, ...parts);
+  if (!full.startsWith(root + sep) || !existsSync(full)) return c.text("Not found", 404);
+  const ext = parts[1].split('.').pop()?.toLowerCase();
+  const types: Record<string, string> = {
+    jpg:'image/jpeg', jpeg:'image/jpeg', png:'image/png', gif:'image/gif',
+    webp:'image/webp', heic:'image/heic', avif:'image/avif', pdf:'application/pdf'
+  };
+  const mime = (ext && types[ext]) || 'application/octet-stream';
+  return new Response(Bun.file(full), {
+    headers: {
+      'Content-Type': mime,
+      'X-Content-Type-Options': 'nosniff',
+      'Content-Security-Policy': "default-src 'none'; sandbox",
+      'Content-Disposition': (mime === 'application/octet-stream' ? 'attachment' : 'inline') +
+        '; filename="' + parts[1] + '"'
+    }
+  });
 });
 
 // ════════════════════════════════════════════
