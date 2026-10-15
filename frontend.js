@@ -1289,7 +1289,7 @@ async function loadSits() {
       ${s.archivos?.length ? `
         <div class="photo-grid" style="margin-bottom:10px">
           ${s.archivos.slice(0,4).map(a => `
-            <div class="photo-item" onclick="verFoto('${a.archivo_path}','${escapeHtml(a.descripcion)}')">
+            <div class="photo-item" onclick="verFoto('${a.archivo_path}','Foto de situación')">
               <img src="${a.archivo_path}" onerror="this.style.display='none';this.parentNode.innerHTML+='📷'">
               <div class="photo-cap">${escapeHtml(a.es_resolucion ? '✅ Resolución' : a.descripcion||'')}</div>
             </div>`).join('')}
