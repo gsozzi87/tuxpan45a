@@ -640,6 +640,9 @@ app.get("/uploads/*", async (c) => {
       !/^[a-zA-Z0-9_.-]+$/.test(parts[1]) || parts[1] === "." || parts[1] === "..") {
     return c.text("Not found", 404);
   }
+  if (parts[0] === 'comprobantes' && getSession(c)?.rol !== 'admin') {
+    return c.json({ error: 'No autorizado' }, 401);
+  }
   const root = resolve(UPLOAD_DIR);
   const full = resolve(root, ...parts);
   if (!full.startsWith(root + sep) || !existsSync(full)) return c.text("Not found", 404);
@@ -853,6 +856,7 @@ app.get("/api/pagos/resumen", (c) => {
 });
 
 app.get("/api/pagos/deudores", (c) => {
+  const esAdmin = getSession(c)?.rol === 'admin';
   const anio = Number(c.req.query("anio") ?? new Date().getFullYear());
   const condos = db.query("SELECT * FROM condominios WHERE activo=1").all() as any[];
   const now = new Date();
@@ -869,7 +873,8 @@ app.get("/api/pagos/deudores", (c) => {
     for (let m = mesInicio; m <= maxM; m++)
       if (!pagos.find((p: any) => p.mes === m)) meses_sin_pagar.push(m);
     if (meses_sin_pagar.length > 0)
-      result.push({ ...co, meses_sin_pagar, adeudo: meses_sin_pagar.length * co.cuota_mensual });
+      result.push({ ...(esAdmin ? co : { id:co.id, unidad:co.unidad, propietario:co.propietario, cuota_mensual:co.cuota_mensual }),
+        meses_sin_pagar, adeudo: meses_sin_pagar.length * co.cuota_mensual });
   });
   const sortUnit = (u: string) => {
     const n = parseInt(u);
@@ -880,6 +885,7 @@ app.get("/api/pagos/deudores", (c) => {
 
 // Estado de cuenta anual (mar 2026 → mar 2027)
 app.get("/api/pagos/estado-cuenta", (c) => {
+  const esAdmin = getSession(c)?.rol === 'admin';
   const condos = db.query("SELECT * FROM condominios WHERE activo=1 ORDER BY CASE WHEN CAST(unidad AS INTEGER) = 0 THEN 1 ELSE 0 END, CAST(unidad AS INTEGER), unidad").all() as any[];
   const meses = [
     {mes:3,anio:2026},{mes:4,anio:2026},{mes:5,anio:2026},{mes:6,anio:2026},
@@ -894,10 +900,15 @@ app.get("/api/pagos/estado-cuenta", (c) => {
     ).all(co.id) as any[];
     pagos.forEach((p: any) => { pagosMap[`${p.anio}-${p.mes}`] = p; });
     const indiviso = totalCuotas > 0 ? Math.round((co.cuota_mensual / totalCuotas) * 10000) / 100 : 0;
-    return { ...co, indiviso, meses: meses.map(({ mes, anio }) => ({
-      mes, anio,
-      pago: pagosMap[`${anio}-${mes}`] || null,
-    }))};
+    const detalleCondo = esAdmin ? co : {
+      id:co.id, unidad:co.unidad, propietario:co.propietario,
+      cuota_mensual:co.cuota_mensual, activo:co.activo
+    };
+    return { ...detalleCondo, indiviso, meses: meses.map(({ mes, anio }) => {
+      const pago = pagosMap[`${anio}-${mes}`] || null;
+      return { mes, anio, pago: !pago || esAdmin ? pago :
+        { id:pago.id, mes:pago.mes, anio:pago.anio, monto:pago.monto } };
+    })};
   });
   return c.json({ condos: result, meses });
 });
@@ -1034,7 +1045,9 @@ app.get("/api/movimientos", (c) => {
   const total_ingresos = (todos as any[]).filter((m: any) => m.tipo === 'ingreso').reduce((s: number, m: any) => s + m.monto, 0);
   const total_egresos  = (todos as any[]).filter((m: any) => m.tipo === 'egreso').reduce((s: number, m: any) => s + m.monto, 0);
 
-  return c.json({ movimientos, total_ingresos, total_egresos, saldo_final: total_ingresos - total_egresos });
+  const movimientoPublico = getSession(c)?.rol === 'admin' ? movimientos :
+    movimientos.map(({ referencia, notas, metodo_pago, ...publico }: any) => publico);
+  return c.json({ movimientos: movimientoPublico, total_ingresos, total_egresos, saldo_final: total_ingresos - total_egresos });
 });
 
 // ════════════════════════════════════════════
@@ -1244,6 +1257,7 @@ app.put("/api/caja-chica", requireAdmin, async (c) => {
 //  GASTOS EXTRAORDINARIOS
 // ════════════════════════════════════════════
 app.get("/api/gastos-ext", (c) => {
+  const esAdmin = getSession(c)?.rol === 'admin';
   const gex = db.query("SELECT * FROM gastos_extraordinarios ORDER BY created_at DESC").all() as any[];
   const condos = db.query("SELECT * FROM condominios WHERE activo=1").all() as any[];
   const totalCuotas = condos.reduce((s: number, co: any) => s + co.cuota_mensual, 0);
@@ -1252,11 +1266,13 @@ app.get("/api/gastos-ext", (c) => {
     const aporte_caja   = g.aporte_caja ?? 0;
     const monto_neto    = Math.max(0, g.monto_total - aporte_caja);
     const cuotas_por_condo = condos.map((co: any) => ({
-      ...co,
+      ...(esAdmin ? co : { id:co.id, unidad:co.unidad, cuota_mensual:co.cuota_mensual }),
+      indiviso: totalCuotas > 0 ? Math.round(co.cuota_mensual / totalCuotas * 10000) / 100 : 0,
       cuota_ext: totalCuotas > 0 ? Math.round((co.cuota_mensual / totalCuotas) * monto_neto * 100) / 100 : 0,
     }));
     const recaudado = (db.query("SELECT SUM(monto) as t FROM pagos WHERE gasto_ext_id=?").get(g.id) as any)?.t ?? 0;
-    const presupuestos = db.query("SELECT * FROM presupuestos WHERE gasto_ext_id=? ORDER BY numero_presupuesto").all(g.id);
+    const presupuestosRaw = db.query("SELECT * FROM presupuestos WHERE gasto_ext_id=? ORDER BY numero_presupuesto").all(g.id) as any[];
+    const presupuestos = esAdmin ? presupuestosRaw : presupuestosRaw.map(({ firma, ...rest }) => rest);
     return { ...g, aporte_caja, monto_neto, cuotas_por_condo, recaudado, presupuestos };
   }));
 });
