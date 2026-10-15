@@ -2269,6 +2269,9 @@ html{color-scheme:light}
             <option value='7'>Jul</option><option value='8'>Ago</option><option value='9'>Sep</option>
             <option value='10'>Oct</option><option value='11'>Nov</option><option value='12'>Dic</option>
           </select>
+          <select class='fs' id='fil-anio-g' style='width:95px' onchange='loadGastos();loadGastosMisc()'>
+            <option value='2026'>2026</option><option value='2027'>2027</option>
+          </select>
           <div id='btn-nuevo-gasto' style='display:none;gap:9px' class='flex'>
             <button class='btn btn-o btn-sm' onclick='generarGastosMes()'>⚡ Generar del mes</button>
             <button class='btn btn-g btn-sm' onclick='openModal("modal-gasto")'>+ Agregar</button>
@@ -2414,7 +2417,7 @@ html{color-scheme:light}
 <div class='modal-ov' id='modal-pago' onclick='closeOv(event,"modal-pago")'><div class='modal mw'>
   <div class='modal-title'>💰 Registrar Pago</div>
   <div class='g2'>
-    <div class='form-g'><label class='form-l'>Condominio</label><select class='fs' id='pago-condo'></select></div>
+    <div class='form-g'><label class='form-l'>Condominio</label><select class='fs' id='pago-condo' onchange='autoMontoPago()'></select></div>
     <div class='form-g'><label class='form-l'>Mes</label><select class='fs' id='pago-mes'>
       <option value='1'>Enero</option><option value='2'>Febrero</option><option value='3'>Marzo</option>
       <option value='4'>Abril</option><option value='5'>Mayo</option><option value='6'>Junio</option>
@@ -2422,7 +2425,7 @@ html{color-scheme:light}
       <option value='10'>Octubre</option><option value='11'>Noviembre</option><option value='12'>Diciembre</option>
     </select></div>
     <div class='form-g'><label class='form-l'>Año</label><select class='fs' id='pago-anio'><option>2026</option><option>2027</option></select></div>
-    <div class='form-g'><label class='form-l'>Monto ($)</label><input class='fi' id='pago-monto' type='number'></div>
+    <div class='form-g'><label class='form-l'>Monto ($)</label><input class='fi' id='pago-monto' type='number' min='0.01' step='0.01'><div id='pago-cuota-sugerida' style='font-size:11px;color:var(--text3);margin-top:5px'>Se completará al elegir el despacho</div></div>
     <div class='form-g'><label class='form-l'>Fecha de pago</label><input class='fi' id='pago-fecha' type='date'></div>
     <div class='form-g'><label class='form-l'>Método</label><select class='fs' id='pago-metodo'>
       <option value='transferencia'>Transferencia</option><option value='efectivo'>Efectivo</option><option value='cheque'>Cheque</option>
@@ -2830,12 +2833,13 @@ html{color-scheme:light}
 <!-- Condóminos (admin) -->
 <div class='modal-ov' id='modal-condos' onclick='closeOv(event,"modal-condos")'><div class='modal ml'>
   <div class='modal-title'>🏢 Gestión de Condóminos</div>
+  <div style='margin:12px 0'><button class='btn btn-g btn-sm' onclick='abrirNuevoCondo()'>+ Agregar despacho</button></div>
   <div id='condos-admin-list'></div>
 </div></div>
 
 <!-- Editar condómino -->
 <div class='modal-ov' id='modal-edit-condo' onclick='closeOv(event,"modal-edit-condo")'><div class='modal'>
-  <div class='modal-title'>Editar Condómino</div>
+  <div class='modal-title' id='ec-titulo'>Editar Condómino</div>
   <input type='hidden' id='ec-id'>
   <div class='form-g'><label class='form-l'>Despacho / Unidad</label><input class='fi' id='ec-unidad'></div>
   <div class='form-g'><label class='form-l'>Propietario</label><input class='fi' id='ec-prop'></div>
