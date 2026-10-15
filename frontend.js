@@ -6,7 +6,17 @@ let firmaCanvas, firmaCtx, dibujandoFirma = false;
 let firmaPresupCanvas, firmaPresupCtx, dibujandoPresup = false;
 let tabAreasActual = 'areas';
 
-const DESPACHOS = ['101','102','103','201','202','203','301-302','303','401','402','403','5to','6to','7mo','8vo','9no'];
+let DESPACHOS=[];
+async function loadUnidades(){
+ const a=await api('/api/unidades');if(!Array.isArray(a))return;
+ DESPACHOS=a.filter(x=>typeof x==='string');
+ for(const id of ['sol-despacho','presup-despacho']){
+  const el=$id(id);if(!el)continue;const v=el.value;
+  el.innerHTML=DESPACHOS.map(d=>`<option value="${escapeHtml(d)}">${escapeHtml(d)}</option>`).join('');
+  if(DESPACHOS.includes(v))el.value=v;
+ }
+}
+
 const MESES     = ['','Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
 const MESES_FULL= ['','Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
 const COLORES   = ['#5b8dee','#4caf87','#e8c96b','#e05555','#a855f7','#f97316','#06b6d4','#84cc16'];
@@ -723,7 +733,7 @@ function editPlantilla(id, concepto, categoria, monto, proveedor, es_variable) {
 
 async function loadGastosMisc() {
   const m = $id('fil-mes-g')?.value || (mesActual());
-  const misc = await api(`/api/gastos-misc?mes=${m}&anio=${anioActual()}`);
+  const misc = await api(`/api/gastos-misc?mes=${m}&anio=${anioGastos()}`);
   const total = misc.reduce((s, x) => s + x.monto, 0);
   const el = $id('misc-list');
   if (!el) return;
@@ -750,7 +760,7 @@ async function registrarMisc() {
     body: JSON.stringify({
       concepto: $id('misc-concepto').value,
       monto:    $id('misc-monto').value,
-      mes:      m, anio: anioActual(),
+      mes:      m, anio: anioGastos(),
       fecha:    $id('misc-fecha').value,
       notas:    $id('misc-notas').value,
     }),
@@ -1111,7 +1121,8 @@ async function borrarGext(id, titulo) {
 }
 
 
-function abrirPresupuesto(gextId) {
+async function abrirPresupuesto(gextId) {
+  await loadUnidades();
   $id('presup-gext-id').value = gextId;
   initCanvasPresup();
   openModal('modal-presupuesto');
@@ -1153,6 +1164,7 @@ async function crearVotPresupuesto(gextId, titulo) {
 
 // ── VOTACIONES ────────────────────────────
 async function loadVotaciones() {
+  await loadUnidades();
   const vots = await api('/api/votaciones');
   const act  = vots.filter(v => v.estado === 'activa' && !esVencida(v.fecha_cierre)).length;
   const bdg  = $id('bdg-vot');
@@ -1217,6 +1229,7 @@ async function loadVotaciones() {
 }
 
 async function crearVotacion() {
+  await loadUnidades();
   const titulo   = $id('vt-titulo').value.trim();
   const optsRaw  = $id('vt-opciones').value.trim();
   if (!titulo || !optsRaw) { showToast('Completá el título y las opciones', false); return; }
@@ -1246,6 +1259,7 @@ async function cerrarVot(id) {
 }
 
 async function abrirVotar(id) {
+  await loadUnidades();
   const v = await api(`/api/votaciones/${id}`);
   if (v.estado === 'cerrada' || esVencida(v.fecha_cierre)) {
     showToast('Esta votación ya está cerrada', false); loadVotaciones(); return;
@@ -1516,7 +1530,8 @@ async function loadMan() {
         </div>`).join('');
 }
 
-function abrirModalSolicitud() {
+async function abrirModalSolicitud() {
+  await loadUnidades();
   // Rellenar select de despachos siempre fresco al abrir
   const sel = $id('sol-despacho');
   if (sel) {
@@ -2304,3 +2319,5 @@ $id('tb-date').textContent = new Date().toLocaleDateString('es-MX', {
 ['dashboard','caja','gastos'].forEach(periodoPagina);
 loadDash();
 
+
+loadUnidades().catch(()=>{});
