@@ -636,16 +636,8 @@ async function loadGastos() {
   const data = await api(m ? `/api/gastos?mes=${m}&anio=${anioGastos()}` : `/api/gastos?anio=${anioGastos()}`);
   const plantilla = await api('/api/gastos/plantilla');
 
-  $id('gasto-stats').innerHTML = `
-    <div class="stat" style="--ac:var(--red)">
-      <div class="stat-lbl">Total gastos</div>
-      <div class="stat-val" style="font-size:22px">${fmtM(data.total)}</div>
-      <div class="stat-sub">${data.gastos.length} registros</div>
-    </div>
-    <div class="stat" style="--ac:var(--gold)">
-      <div class="stat-lbl">Plantilla mensual estimada</div>
-      <div class="stat-val" style="font-size:22px">${fmtM(plantilla.reduce((s, g) => s + g.monto, 0))}</div>
-    </div>`;
+  // Libro de caja es la fuente contable de egresos reales del período.
+  const libro=await api(`/api/movimientos?anio=${anioGastos()}${m?'&mes='+m:''}`);
 
   // Cargar pagos del mes para cada gasto fijo
   const mesFil = Number($id('fil-mes-g').value) || (mesActual());
@@ -653,6 +645,20 @@ async function loadGastos() {
   const pagosPlantilla = await Promise.all(
     plantilla.map(g => api(`/api/gastos/plantilla/${g.id}/pagos?mes=${mesFil}&anio=${anioGastos()}`))
   );
+  const egresos=libro.total_egresos??0;
+  const movimientosEgreso=(libro.movimientos||[]).filter(x=>x.tipo==='egreso');
+  const presupuesto=pagosPlantilla.reduce((total,p)=>total+(p?.monto??0),0);
+  $id('gasto-stats').innerHTML = `
+    <div class="stat" style="--ac:var(--red)">
+      <div class="stat-lbl">Egresos reales del período</div>
+      <div class="stat-val" style="font-size:22px">${fmtM(egresos)}</div>
+      <div class="stat-sub">${movimientosEgreso.length} movimientos · coincide con el libro de caja</div>
+    </div>
+    <div class="stat" style="--ac:var(--gold)">
+      <div class="stat-lbl">Presupuesto estimado de ${MESES_FULL[mesFil]} ${anioGastos()}</div>
+      <div class="stat-val" style="font-size:22px">${fmtM(presupuesto)}</div>
+      <div class="stat-sub">No es dinero gastado</div>
+    </div>`;
   $id('plantilla-list').innerHTML = plantilla.length
     ? plantilla.map((g, i) => {
         const info=pagosPlantilla[i]||{};
