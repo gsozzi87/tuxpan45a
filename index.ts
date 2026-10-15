@@ -861,12 +861,17 @@ app.get("/api/condominios",requireAdmin,c=>{
  const total=activos.reduce((sum,co)=>sum+co.cuota_mensual,0);
  const now=mexicoPeriod(),maxM=anio>now.anio?0:anio<now.anio?12:now.mes;
  return c.json(condos.map(co=>{
-   const meses_pagados=(db.query("SELECT mes FROM pagos WHERE condominio_id=? AND anio=? AND tipo_pago='ordinario'").all(co.id,anio) as any[]).map(p=>p.mes);
+   const meses_pagados:number[]=[];
+   for(let m=1;m<=12;m++)if(pagosAcreditados(co.id,m,anio)>=cuotaPeriodo(co,m,anio)-0.009)meses_pagados.push(m);
    const meses_deudores:number[]=[];
    const desde=anio===2026?3:1;
-   if(co.activo)for(let m=desde;m<=maxM;m++)if(!meses_pagados.includes(m))meses_deudores.push(m);
+   let adeudo_anio=0;
+   if(co.activo)for(let m=desde;m<=maxM;m++){
+     const pendiente=Math.max(0,cuotaPeriodo(co,m,anio)-pagosAcreditados(co.id,m,anio));
+     if(pendiente>=0.01){meses_deudores.push(m);adeudo_anio+=pendiente;}
+   }
    return {...co,indiviso:co.activo&&total>0?Math.round(co.cuota_mensual/total*10000)/100:0,
-     meses_pagados,meses_deudores,adeudo_anio:meses_deudores.length*co.cuota_mensual};
+     meses_pagados,meses_deudores,adeudo_anio:Math.round(adeudo_anio*100)/100};
  }));
 });
 
@@ -968,16 +973,19 @@ app.get("/api/pagos/resumen", (c) => {
   const condos = db.query("SELECT * FROM condominios WHERE activo=1").all() as any[];
   let pagaron=0,cuota_total=0;
   condos.forEach((co:any)=>{
-    cuota_total+=co.cuota_mensual;
-    const pago=db.query("SELECT monto FROM pagos WHERE condominio_id=? AND mes=? AND anio=? AND tipo_pago='ordinario'").get(co.id,mes,anio) as any;
-    if(pago?.monto>=co.cuota_mensual-0.009)pagaron++;
+    cuota_total+=cuotaPeriodo(co,mes,anio);
+    if(pagosAcreditados(co.id,mes,anio)>=cuotaPeriodo(co,mes,anio)-0.009)pagaron++;
   });
   // Los ingresos realmente cobrados incluyen unidades dadas de baja que
   // pagaron ese período: deben coincidir con el libro de caja.
-  const recaudado=(db.query("SELECT COALESCE(SUM(monto),0) t FROM pagos WHERE mes=? AND anio=? AND tipo_pago='ordinario'")
+  const ingresoSimple=(db.query("SELECT COALESCE(SUM(monto),0) t FROM pagos WHERE mes=? AND anio=? AND tipo_pago='ordinario'")
     .get(mes,anio) as any).t;
+  const ingresoMultiple=(db.query("SELECT COALESCE(SUM(monto),0) t FROM pagos_multiples WHERE substr(fecha_pago,1,7)=?")
+    .get(`${anio}-${String(mes).padStart(2,'0')}`) as any).t;
+  const recaudado=ingresoSimple+ingresoMultiple;
+  const acreditado_mes=condos.reduce((sum:number,co:any)=>sum+pagosAcreditados(co.id,mes,anio),0);
   const pendientes = condos.length - pagaron;
-  const porcentaje = cuota_total > 0 ? Math.round((recaudado / cuota_total) * 100) : 0;
+  const porcentaje = cuota_total > 0 ? Math.round((acreditado_mes / cuota_total) * 100) : 0;
 
   // Gastos del mes (registrados)
   const gastosRes = db.query("SELECT COALESCE(SUM(monto),0) as t FROM gastos WHERE mes=? AND anio=? AND COALESCE(es_recurrente,0)=0").get(mes, anio) as any;
@@ -1011,7 +1019,9 @@ app.get("/api/pagos/resumen", (c) => {
   }
   let saldo_acumulado = 0;
   for (const {mes:m, anio:a} of allMeses) {
-    const recMes=(db.query("SELECT COALESCE(SUM(monto),0) t FROM pagos WHERE mes=? AND anio=?").get(m,a) as any).t;
+    const recSimple=(db.query("SELECT COALESCE(SUM(monto),0) t FROM pagos WHERE mes=? AND anio=?").get(m,a) as any).t;
+    const recMulti=(db.query("SELECT COALESCE(SUM(monto),0) t FROM pagos_multiples WHERE substr(fecha_pago,1,7)=?").get(`${a}-${String(m).padStart(2,'0')}`) as any).t;
+    const recMes=recSimple+recMulti;
     const gMes   = (db.query("SELECT COALESCE(SUM(monto),0) as t FROM gastos WHERE mes=? AND anio=? AND COALESCE(es_recurrente,0)=0").get(m,a) as any)?.t ?? 0;
     const miMes  = (db.query("SELECT COALESCE(SUM(monto),0) as t FROM gastos_misc WHERE mes=? AND anio=?").get(m,a) as any)?.t ?? 0;
     const abMes  = (db.query("SELECT COALESCE(SUM(monto),0) as t FROM gastos_pagos WHERE mes=? AND anio=?").get(m,a) as any)?.t ?? 0;
@@ -1035,7 +1045,7 @@ app.get("/api/pagos/resumen", (c) => {
     return g_acc + (r?.t ?? 0);
   }, 0);
 
-  return c.json({ pagaron, pendientes, recaudado, cuota_total, porcentaje,
+  return c.json({ pagaron, pendientes, recaudado, acreditado_mes, cuota_total, porcentaje,
     total_condominios: condos.length, total_gastos, total_misc, total_pagos_fijos, gastos_fijos,
     ahorro_mes, cobertura_fijos, saldo_caja, saldo_caja_bruto, saldo_inicial, deposito_extra,
     aportes_comprometidos, total_ext, recaudado_ext });
@@ -1052,11 +1062,10 @@ app.get("/api/pagos/deudores", (c) => {
   const result: any[] = [];
   condos.forEach((co: any) => {
     if (mesInicio > 12) return; // año anterior a 2026, ignorar
-    const pagos=db.query("SELECT mes,monto FROM pagos WHERE condominio_id=? AND anio=? AND tipo_pago='ordinario'").all(co.id,anio) as any[];
     const faltantes_mes:{mes:number;pagado:number;pendiente:number}[]=[];
     for(let m=mesInicio;m<=maxM;m++){
-      const pagado=pagos.find((p:any)=>p.mes===m)?.monto??0;
-      const pendiente=Math.max(0,Math.round((co.cuota_mensual-pagado)*100)/100);
+      const pagado=pagosAcreditados(co.id,m,anio);
+      const pendiente=Math.max(0,Math.round((cuotaPeriodo(co,m,anio)-pagado)*100)/100);
       if(pendiente>=0.01)faltantes_mes.push({mes:m,pagado,pendiente});
     }
     if(faltantes_mes.length){
@@ -1079,21 +1088,25 @@ app.get("/api/pagos/estado-cuenta", (c) => {
   const meses = estadoCuentaWindow();
   const totalCuotas = condos.reduce((s, co) => s + co.cuota_mensual, 0);
   const result = condos.map(co => {
-    const pagosMap: Record<string, any> = {};
-    const pagos = db.query(
-      "SELECT * FROM pagos WHERE condominio_id=? AND tipo_pago='ordinario' ORDER BY anio,mes"
-    ).all(co.id) as any[];
-    pagos.forEach((p: any) => { pagosMap[`${p.anio}-${p.mes}`] = p; });
-    const indiviso = totalCuotas > 0 ? Math.round((co.cuota_mensual / totalCuotas) * 10000) / 100 : 0;
-    const detalleCondo = esAdmin ? co : {
-      id:co.id, unidad:co.unidad, propietario:co.propietario,
-      cuota_mensual:co.cuota_mensual, activo:co.activo
-    };
-    return { ...detalleCondo, indiviso, meses: meses.map(({ mes, anio }) => {
-      const pago = pagosMap[`${anio}-${mes}`] || null;
-      const pendiente=Math.max(0,Math.round((co.cuota_mensual-(pago?.monto??0))*100)/100);
-      return {mes,anio,pendiente,estado:!pago?'pendiente':pendiente>0.009?'parcial':'pagado',
-        pago:!pago||esAdmin?pago:{id:pago.id,mes:pago.mes,anio:pago.anio,monto:pago.monto}};
+    const pagos=db.query("SELECT * FROM pagos WHERE condominio_id=? AND tipo_pago='ordinario' ORDER BY anio,mes").all(co.id) as any[];
+    const pagosMap:Record<string,any>={};
+    pagos.forEach(p=>{pagosMap[`${p.anio}-${p.mes}`]=p;});
+    const indiviso=totalCuotas>0?Math.round((co.cuota_mensual/totalCuotas)*10000)/100:0;
+    const detalleCondo=esAdmin?co:{id:co.id,unidad:co.unidad,propietario:co.propietario,cuota_mensual:co.cuota_mensual,activo:co.activo};
+    return {...detalleCondo,indiviso,meses:meses.map(({mes,anio})=>{
+      const cuota=cuotaPeriodo(co,mes,anio),acreditado=pagosAcreditados(co.id,mes,anio);
+      const pendiente=Math.max(0,Math.round((cuota-acreditado)*100)/100);
+      const fuente=pagosMap[`${anio}-${mes}`]||null;
+      const origen=fuente?db.query("SELECT COUNT(*) n FROM pagos_aplicaciones WHERE origen='pago' AND origen_id=?").get(fuente.id) as any:null;
+      const aplicaciones=db.query("SELECT origen,origen_id,monto FROM pagos_aplicaciones WHERE condominio_id=? AND mes=? AND anio=?").all(co.id,mes,anio) as any[];
+      const origen_pago_id=aplicaciones.find(a=>a.origen==='pago')?.origen_id??null;
+      const distribuido=!!(origen?.n||aplicaciones.length);
+      const pago=acreditado>0?{
+        id:fuente?.id??null,monto:acreditado,numero_recibo:esAdmin?fuente?.numero_recibo:null,
+        distribuido,origen_pago_id
+      }:null;
+      return {mes,anio,cuota,acreditado,pendiente,
+        estado:acreditado<=0?'pendiente':pendiente>0.009?'parcial':'pagado',pago};
     })};
   });
   return c.json({ condos: result, meses });
@@ -1202,6 +1215,8 @@ app.post("/api/pagos", requireAdmin, async (c) => {
     if (prev && b.tipo === 'extraordinario' && prev.gasto_ext_id !== b.gastoExtId) {
       return c.json({ ok:false, error:'Ya existe otro pago extraordinario para esa unidad y mes. No se reemplazó.' }, 409);
     }
+    if(prev&&db.query("SELECT 1 FROM pagos_aplicaciones WHERE origen='pago' AND origen_id=?").get(prev.id))
+      return c.json({ok:false,error:'Este cobro cubre varios meses; editá su distribución desde Estado de Cuenta.'},409);
     if (prev && body.confirm_replace !== '1') {
       return c.json({ok:false,requiere_confirmacion:true,
         error:'Ya existe un pago de esta unidad y período. Para editarlo confirmá el reemplazo; quedará registrado en el historial.'},409);
@@ -1255,6 +1270,7 @@ app.delete("/api/pagos/:id", requireAdmin, (c) => {
       "INSERT INTO pagos_historial (pago_id,condominio_id,mes,anio,tipo_pago,accion,antes_json,registrado_por) VALUES (?,?,?,?,?,?,?,?)",
       [prev.id,prev.condominio_id,prev.mes,prev.anio,prev.tipo_pago,'eliminacion',JSON.stringify(prev),sess.userId]
     );
+    db.run("DELETE FROM pagos_aplicaciones WHERE origen='pago' AND origen_id=?",[id]);
     db.run("DELETE FROM pagos WHERE id=?", [id]);
   })();
   return c.json({ ok:true });
