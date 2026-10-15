@@ -18,6 +18,7 @@ import { UploadValidationError, validateUpload, MAX_UPLOAD_BYTES } from "./uploa
 import { makeRateLimiter, eligibleUnit } from "./request-policy";
 import { parsePaymentInput, PaymentValidationError } from "./payment-policy";
 import { mexicoPeriod, estadoCuentaWindow } from "./date-period";
+import { objetivoMensual, estadoPago } from "./monthly-expenses";
 
 // ── Directorios persistentes ──
 const UPLOAD_DIR = process.env.UPLOAD_DIR ?? "./uploads";
@@ -163,6 +164,15 @@ db.run(`CREATE TABLE IF NOT EXISTS gastos_pagos (
   comprobante_path TEXT,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (plantilla_id) REFERENCES gastos_plantilla(id)
+)`);
+
+db.run(`CREATE TABLE IF NOT EXISTS gastos_presupuesto_mes (
+  plantilla_id INTEGER NOT NULL,
+  mes INTEGER NOT NULL CHECK(mes BETWEEN 1 AND 12),
+  anio INTEGER NOT NULL,
+  monto REAL NOT NULL CHECK(monto>=0),
+  PRIMARY KEY(plantilla_id,mes,anio),
+  FOREIGN KEY(plantilla_id) REFERENCES gastos_plantilla(id)
 )`);
 
 db.run(`CREATE TABLE IF NOT EXISTS gastos_extraordinarios (
@@ -439,7 +449,6 @@ async function seed() {
       ["101","Manuel Vargas",1800],
       ["102","Alejandro Valladares",2000],
       ["103","Alejandro Hidalgo",1800],
-      ["201","",0],
       ["202","Gustavo Garnica",1900],
       ["203","Jesús Alarcón",1800],
       ["301-302","Lic. Sibaja",5200],
@@ -460,6 +469,24 @@ async function seed() {
       ins.run([u, p, q, indiviso]);
     });
     console.log("✓ Condóminos creados con cuotas reales");
+  }
+
+
+  // Unidad 201: eliminar solo si carece de historial, o dejar inactiva
+  // para preservar asientos contables y documentación.
+  const unit201 = db.query("SELECT id FROM condominios WHERE unidad='201'").get() as any;
+  if (unit201) {
+    const pagos = (db.query("SELECT COUNT(*) n FROM pagos WHERE condominio_id=?").get(unit201.id) as any).n;
+    const votos = (db.query("SELECT COUNT(*) n FROM votos WHERE despacho='201'").get() as any).n;
+    const presupuestos = (db.query("SELECT COUNT(*) n FROM presupuestos WHERE despacho='201'").get() as any).n;
+    const solicitudes = (db.query("SELECT COUNT(*) n FROM solicitudes WHERE despacho='201'").get() as any).n;
+    if (pagos+votos+presupuestos+solicitudes===0) {
+      db.run("DELETE FROM condominios WHERE id=?", [unit201.id]);
+      console.log("✓ Unidad vacía 201 eliminada");
+    } else {
+      db.run("UPDATE condominios SET activo=0 WHERE id=?", [unit201.id]);
+      console.warn("⚠ Unidad 201 desactivada: conserva historial; pagos=%d votos=%d presupuestos=%d solicitudes=%d",pagos,votos,presupuestos,solicitudes);
+    }
   }
 
   // ── Gastos plantilla (recurrentes por defecto) ──
@@ -1053,8 +1080,8 @@ app.get("/api/movimientos", (c) => {
 app.get("/api/gastos", (c) => {
   const mes = c.req.query("mes"); const anio = c.req.query("anio") ?? String(mexicoPeriod().anio);
   const gastos = mes
-    ? db.query("SELECT * FROM gastos WHERE mes=? AND anio=? ORDER BY fecha DESC").all(Number(mes), Number(anio))
-    : db.query("SELECT * FROM gastos WHERE anio=? ORDER BY fecha DESC").all(Number(anio));
+    ? db.query("SELECT * FROM gastos WHERE mes=? AND anio=? AND COALESCE(es_recurrente,0)=0 ORDER BY fecha DESC").all(Number(mes), Number(anio))
+    : db.query("SELECT * FROM gastos WHERE anio=? AND COALESCE(es_recurrente,0)=0 ORDER BY fecha DESC").all(Number(anio));
   const total = (gastos as any[]).reduce((s, g) => s + g.monto, 0);
   return c.json({ gastos, total });
 });
@@ -1099,43 +1126,52 @@ app.delete("/api/gastos/plantilla/:id", requireAdmin, (c) => {
 });
 
 // ── Pagos parciales a gastos fijos ──
-app.get("/api/gastos/plantilla/:id/pagos", (c) => {
-  const id = Number(c.req.param("id"));
-  const mes  = Number(c.req.query("mes")  ?? mexicoPeriod().mes);
-  const anio = Number(c.req.query("anio") ?? mexicoPeriod().anio);
-  const plantilla = db.query("SELECT * FROM gastos_plantilla WHERE id=?").get(id) as any;
-  if (!plantilla) return c.json({ error: "No encontrado" }, 404);
-  const pagos = db.query(
-    "SELECT * FROM gastos_pagos WHERE plantilla_id=? AND mes=? AND anio=? ORDER BY created_at ASC"
-  ).all(id, mes, anio) as any[];
-  const pagado = pagos.reduce((s: number, p: any) => s + p.monto, 0);
-  const pendiente = Math.max(0, plantilla.monto - pagado);
-  return c.json({ plantilla, pagos, pagado, pendiente, mes, anio });
+function getGastoObjetivo(plantilla: any, mes: number, anio: number) {
+  const registro=db.query("SELECT monto FROM gastos_presupuesto_mes WHERE plantilla_id=? AND mes=? AND anio=?").get(plantilla.id,mes,anio) as any;
+  const pagado=(db.query("SELECT COALESCE(SUM(monto),0) total FROM gastos_pagos WHERE plantilla_id=? AND mes=? AND anio=?").get(plantilla.id,mes,anio) as any).total;
+  const ahora=mexicoPeriod(),esHistorico=anio<ahora.anio||(anio===ahora.anio&&mes<ahora.mes);
+  const creado=db.query("SELECT monto FROM gastos WHERE es_recurrente=1 AND concepto=? AND mes=? AND anio=? ORDER BY id DESC LIMIT 1").get(plantilla.concepto,mes,anio) as any;
+  const obj=objetivoMensual({variable:!!plantilla.es_variable,plantilla:plantilla.monto,configurado:registro?.monto??null,pagado,esHistorico,historicoGenerado:creado?.monto??null});
+  return {...obj,pagado,...estadoPago(pagado,obj)};
+}
+
+app.get("/api/gastos/plantilla/:id/pagos",(c)=>{
+  const id=Number(c.req.param("id")),mes=Number(c.req.query("mes")??mexicoPeriod().mes),anio=Number(c.req.query("anio")??mexicoPeriod().anio);
+  if (!Number.isInteger(mes)||mes<1||mes>12||!Number.isInteger(anio))return c.json({error:"Período inválido"},400);
+  const plantilla=db.query("SELECT * FROM gastos_plantilla WHERE id=?").get(id) as any;
+  if(!plantilla)return c.json({error:"No encontrado"},404);
+  const pagos=db.query("SELECT * FROM gastos_pagos WHERE plantilla_id=? AND mes=? AND anio=? ORDER BY created_at ASC").all(id,mes,anio) as any[];
+  return c.json({plantilla,pagos,...getGastoObjetivo(plantilla,mes,anio),mes,anio});
 });
 
-app.post("/api/gastos/plantilla/:id/pagos", requireAdmin, async (c) => {
-  const id = Number(c.req.param("id"));
-  const b = await c.req.parseBody();
-  const mes   = Number(b.mes)   || (mexicoPeriod().mes);
-  const anio  = Number(b.anio)  || mexicoPeriod().anio;
-  const monto = Number(b.monto);
-  if (!monto || monto <= 0) return c.json({ error: "Monto inválido" }, 400);
-  const plantilla = db.query("SELECT * FROM gastos_plantilla WHERE id=?").get(id) as any;
-  const pagado = (db.query(
-    "SELECT SUM(monto) as t FROM gastos_pagos WHERE plantilla_id=? AND mes=? AND anio=?"
-  ).get(id, mes, anio) as any)?.t ?? 0;
-  if (pagado + monto > plantilla.monto * 1.001) {
-    return c.json({ error: `El pago excede el monto pendiente ($${(plantilla.monto - pagado).toFixed(2)})` }, 400);
-  }
-  let comprobante_path: string | null = null;
-  if (b.comprobante && typeof b.comprobante !== "string") {
-    comprobante_path = await saveFile(b.comprobante as File, "comprobantes");
-  }
-  db.run(
-    "INSERT INTO gastos_pagos (plantilla_id,mes,anio,monto,fecha,notas,comprobante_path) VALUES (?,?,?,?,?,?,?)",
-    [id, mes, anio, monto, b.fecha || new Date().toISOString().slice(0,10), b.notas || null, comprobante_path]
-  );
-  return c.json({ ok: true });
+app.put("/api/gastos/plantilla/:id/objetivo",requireAdmin,async(c)=>{
+  const id=Number(c.req.param("id")),b=await c.req.json(),mes=Number(b.mes),anio=Number(b.anio),monto=Number(b.monto);
+  if(!Number.isInteger(mes)||mes<1||mes>12||!Number.isInteger(anio)||anio<2026||anio>2100||
+     !Number.isFinite(monto)||monto<0||monto>1_000_000_000)
+    return c.json({ok:false,error:"Período o importe inválido"},400);
+  const plantilla=db.query("SELECT * FROM gastos_plantilla WHERE id=?").get(id) as any;
+  if(!plantilla)return c.json({ok:false,error:"Concepto no encontrado"},404);
+  db.run(`INSERT INTO gastos_presupuesto_mes(plantilla_id,mes,anio,monto) VALUES(?,?,?,?)
+    ON CONFLICT(plantilla_id,mes,anio) DO UPDATE SET monto=excluded.monto`,[id,mes,anio,monto]);
+  return c.json({ok:true,objetivo:getGastoObjetivo(plantilla,mes,anio)});
+});
+
+app.post("/api/gastos/plantilla/:id/pagos",requireAdmin,async(c)=>{
+  const id=Number(c.req.param("id")),b=await c.req.parseBody(),mes=Number(b.mes),anio=Number(b.anio),monto=Number(b.monto);
+  if(!Number.isInteger(mes)||mes<1||mes>12||!Number.isInteger(anio)||anio<2026||
+     !Number.isFinite(monto)||monto<=0||monto>1_000_000_000)
+    return c.json({ok:false,error:"Pago o período inválido"},400);
+  const plantilla=db.query("SELECT * FROM gastos_plantilla WHERE id=? AND activo=1").get(id) as any;
+  if(!plantilla)return c.json({ok:false,error:"Concepto inexistente o inactivo"},404);
+  const obj=getGastoObjetivo(plantilla,mes,anio);
+  if(!plantilla.es_variable && obj.monto!==null && obj.pagado+monto>obj.monto+0.009)
+    return c.json({ok:false,error:`El pago supera el pendiente de ${obj.pendiente.toFixed(2)}`},400);
+  if(plantilla.es_variable && obj.fuente==='mes' && obj.monto!==null && obj.pagado+monto>obj.monto+0.009)
+    return c.json({ok:false,error:"El pago excede lo configurado para el mes; actualizá el objetivo primero."},400);
+  const comprobante_path=b.comprobante&&typeof b.comprobante!=="string"?await saveFile(b.comprobante as File,"comprobantes"):null;
+  db.run("INSERT INTO gastos_pagos(plantilla_id,mes,anio,monto,fecha,notas,comprobante_path) VALUES(?,?,?,?,?,?,?)",
+    [id,mes,anio,monto,b.fecha||`${anio}-${String(mes).padStart(2,'0')}-01`,b.notas||null,comprobante_path]);
+  return c.json({ok:true});
 });
 
 app.delete("/api/gastos/pagos/:id", requireAdmin, (c) => {
