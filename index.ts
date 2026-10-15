@@ -2680,6 +2680,20 @@ html{color-scheme:light}
 <!-- Registrar pago -->
 <div class='modal-ov' id='modal-pago' onclick='closeOv(event,"modal-pago")'><div class='modal mw'>
   <div class='modal-title'>💰 Registrar Pago</div>
+  <div style='margin:10px 0 14px;padding:11px;background:var(--bg2);border-radius:8px'>
+    <label style='display:flex;align-items:center;gap:8px;cursor:pointer;font-weight:600'>
+      <input type='checkbox' id='pago-varios' onchange='togglePagoVarios()' style='width:18px;height:18px'>
+      Cobrar varios meses juntos (anticipo o anualidad)
+    </label>
+    <div style='font-size:11px;color:var(--text3);margin:5px 0 0 26px'>Un solo ingreso en el libro de caja, con crédito distribuido entre los meses seleccionados.</div>
+  </div>
+  <div id='pago-rango' style='display:none;margin-bottom:12px'>
+    <div class='g2'>
+      <div class='form-g'><label class='form-l'>Desde</label><input id='pago-desde' class='fi' type='month' min='2026-03' onchange='actualizarPlanPago()'></div>
+      <div class='form-g'><label class='form-l'>Hasta (inclusive)</label><input id='pago-hasta' class='fi' type='month' min='2026-03' onchange='actualizarPlanPago()'></div>
+    </div>
+    <div id='pago-plan' style='padding:10px;background:var(--bg3);border-radius:8px;color:var(--text2);font-size:12px'>Seleccioná el rango.</div>
+  </div>
   <div class='g2'>
     <div class='form-g'><label class='form-l'>Condominio</label><select class='fs' id='pago-condo' onchange='autoMontoPago()'></select></div>
     <div class='form-g'><label class='form-l'>Mes</label><select class='fs' id='pago-mes'>
@@ -2700,6 +2714,22 @@ html{color-scheme:light}
   <div class='form-g'><label class='form-l'>Notas</label><input class='fi' id='pago-notas' placeholder='Observaciones opcionales'></div>
   <div class='form-g'><label class='form-l'>Comprobante (archivo)</label><input class='fi' id='pago-comp' type='file' accept='image/*,.pdf'></div>
   <div style='display:flex;gap:9px'><button class='btn btn-g' onclick='registrarPago()'>Guardar</button><button class='btn btn-o' onclick='closeModal("modal-pago")'>Cancelar</button></div>
+</div></div>
+
+<!-- Redistribuir un cobro ya registrado; no cambia el importe ni crea ingresos -->
+<div class='modal-ov' id='modal-cobertura' onclick='closeOv(event,"modal-cobertura")'><div class='modal'>
+  <div class='modal-title'>📅 Aplicar un pago a varios meses</div>
+  <input type='hidden' id='cobertura-pago-id'>
+  <div id='cobertura-origen' style='font-size:13px;margin-bottom:12px;color:var(--text2)'></div>
+  <div class='g2'>
+    <div class='form-g'><label class='form-l'>Desde</label><input id='cobertura-desde' class='fi' type='month' min='2026-03' onchange='previewCobertura()'></div>
+    <div class='form-g'><label class='form-l'>Hasta</label><input id='cobertura-hasta' class='fi' type='month' min='2026-03' onchange='previewCobertura()'></div>
+  </div>
+  <div id='cobertura-preview' style='padding:12px;margin-bottom:12px;background:var(--bg2);font-size:12px;border-radius:8px'></div>
+  <div style='display:flex;gap:9px'>
+    <button id='cobertura-guardar' class='btn btn-g' onclick='guardarCobertura()'>Aplicar distribución</button>
+    <button class='btn btn-o' onclick='closeModal("modal-cobertura")'>Cancelar</button>
+  </div>
 </div></div>
 
 <!-- Gasto ordinario -->
