@@ -16,6 +16,7 @@ import { existsSync, mkdirSync } from "fs";
 import { join, resolve, sep } from "path";
 import { UploadValidationError, validateUpload, MAX_UPLOAD_BYTES } from "./upload-policy";
 import { makeRateLimiter, eligibleUnit } from "./request-policy";
+import { parsePaymentInput, PaymentValidationError } from "./payment-policy";
 
 // ── Directorios persistentes ──
 const UPLOAD_DIR = process.env.UPLOAD_DIR ?? "./uploads";
@@ -81,6 +82,21 @@ db.run(`CREATE TABLE IF NOT EXISTS pagos (
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (condominio_id) REFERENCES condominios(id),
   UNIQUE(condominio_id, mes, anio, tipo_pago)
+)`);
+
+// Historial independiente para conservar auditoría aun después de borrar pagos.
+db.run(`CREATE TABLE IF NOT EXISTS pagos_historial (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  pago_id INTEGER,
+  condominio_id INTEGER NOT NULL,
+  mes INTEGER NOT NULL,
+  anio INTEGER NOT NULL,
+  tipo_pago TEXT NOT NULL,
+  accion TEXT NOT NULL,
+  antes_json TEXT,
+  despues_json TEXT,
+  registrado_por INTEGER,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 )`);
 
 db.run(`CREATE TABLE IF NOT EXISTS gastos (
@@ -889,30 +905,73 @@ app.get("/api/pagos/estado-cuenta", (c) => {
 app.post("/api/pagos", requireAdmin, async (c) => {
   try {
     const body = await c.req.parseBody();
-    let comprobante_path: string | null = null;
-    if (body.comprobante && typeof body.comprobante !== "string") {
-      comprobante_path = await saveFile(body.comprobante, "comprobantes");
+    const b = parsePaymentInput(body);
+    const condo = db.query("SELECT id FROM condominios WHERE id=? AND activo=1").get(b.condoId);
+    if (!condo) return c.json({ ok:false, error:'Condominio no encontrado o inactivo.' }, 404);
+    if (b.gastoExtId !== null) {
+      const gasto = db.query("SELECT id FROM gastos_extraordinarios WHERE id=?").get(b.gastoExtId);
+      if (!gasto) return c.json({ ok:false, error:'Gasto extraordinario inexistente.' }, 404);
     }
-    db.run(
-      `INSERT OR REPLACE INTO pagos
-        (condominio_id,mes,anio,monto,fecha_pago,metodo_pago,referencia,numero_recibo,notas,comprobante_path,tipo_pago,gasto_ext_id)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
-      [
-        Number(body.condominio_id), Number(body.mes), Number(body.anio),
-        Number(body.monto), body.fecha_pago || null, body.metodo_pago || null,
-        body.referencia || null, body.numero_recibo || null,
-        body.notas || null, comprobante_path,
-        body.tipo_pago || "ordinario",
-        body.gasto_ext_id ? Number(body.gasto_ext_id) : null,
-      ]
-    );
-    return c.json({ ok: true });
-  } catch (e: any) { return c.json({ ok: false, error: e.message }, 400); }
+    const prev = db.query(
+      "SELECT * FROM pagos WHERE condominio_id=? AND mes=? AND anio=? AND tipo_pago=?"
+    ).get(b.condoId, b.mes, b.anio, b.tipo) as any;
+    // La restricción histórica de SQLite sólo permite un extraordinario por unidad/mes.
+    // Ante un segundo gasto distinto, rechazar en vez de reemplazar información silenciosamente.
+    if (prev && b.tipo === 'extraordinario' && prev.gasto_ext_id !== b.gastoExtId) {
+      return c.json({ ok:false, error:'Ya existe otro pago extraordinario para esa unidad y mes. No se reemplazó.' }, 409);
+    }
+
+    const comprobante_path = body.comprobante && typeof body.comprobante !== "string"
+      ? await saveFile(body.comprobante, "comprobantes") : null;
+    const sess = (c as any).session;
+    let pagoId = 0;
+    const save = db.transaction(() => {
+      const data = [
+        b.monto, body.fecha_pago || null, body.metodo_pago || null,
+        body.referencia || null, body.numero_recibo || null, body.notas || null
+      ];
+      if (prev) {
+        // UPDATE conserva el id, el comprobante anterior si no se subió uno nuevo
+        // y cualquier referencia externa a este pago.
+        db.run(
+          "UPDATE pagos SET monto=?,fecha_pago=?,metodo_pago=?,referencia=?,numero_recibo=?,notas=?,comprobante_path=COALESCE(?,comprobante_path),gasto_ext_id=? WHERE id=?",
+          [...data, comprobante_path, b.gastoExtId, prev.id]
+        );
+        pagoId = prev.id;
+      } else {
+        const res = db.run(
+          "INSERT INTO pagos (condominio_id,mes,anio,monto,fecha_pago,metodo_pago,referencia,numero_recibo,notas,comprobante_path,tipo_pago,gasto_ext_id,registrado_por) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+          [b.condoId,b.mes,b.anio,...data,comprobante_path,b.tipo,b.gastoExtId,sess.userId]
+        );
+        pagoId = Number(res.lastInsertRowid);
+      }
+      const despues = db.query("SELECT * FROM pagos WHERE id=?").get(pagoId);
+      db.run(
+        "INSERT INTO pagos_historial (pago_id,condominio_id,mes,anio,tipo_pago,accion,antes_json,despues_json,registrado_por) VALUES (?,?,?,?,?,?,?,?,?)",
+        [pagoId,b.condoId,b.mes,b.anio,b.tipo,prev?'actualizacion':'alta',prev?JSON.stringify(prev):null,JSON.stringify(despues),sess.userId]
+      );
+    });
+    save();
+    return c.json({ ok:true, id:pagoId, actualizado:!!prev });
+  } catch (e: any) {
+    if (e instanceof UploadValidationError) throw e;
+    return c.json({ ok:false, error:e instanceof PaymentValidationError ? e.message : 'No se pudo registrar el pago.' }, 400);
+  }
 });
 
 app.delete("/api/pagos/:id", requireAdmin, (c) => {
-  db.run("DELETE FROM pagos WHERE id=?", [Number(c.req.param("id"))]);
-  return c.json({ ok: true });
+  const id = Number(c.req.param("id"));
+  const prev = db.query("SELECT * FROM pagos WHERE id=?").get(id) as any;
+  if (!prev) return c.json({ ok:false, error:'Pago no encontrado.' }, 404);
+  const sess = (c as any).session;
+  db.transaction(() => {
+    db.run(
+      "INSERT INTO pagos_historial (pago_id,condominio_id,mes,anio,tipo_pago,accion,antes_json,registrado_por) VALUES (?,?,?,?,?,?,?,?)",
+      [prev.id,prev.condominio_id,prev.mes,prev.anio,prev.tipo_pago,'eliminacion',JSON.stringify(prev),sess.userId]
+    );
+    db.run("DELETE FROM pagos WHERE id=?", [id]);
+  })();
+  return c.json({ ok:true });
 });
 
 // ════════════════════════════════════════════
