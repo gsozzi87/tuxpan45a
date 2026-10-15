@@ -15,6 +15,7 @@ import { Database } from "bun:sqlite";
 import { existsSync, mkdirSync } from "fs";
 import { join, resolve, sep } from "path";
 import { UploadValidationError, validateUpload, MAX_UPLOAD_BYTES } from "./upload-policy";
+import { makeRateLimiter, eligibleUnit } from "./request-policy";
 
 // ── Directorios persistentes ──
 const UPLOAD_DIR = process.env.UPLOAD_DIR ?? "./uploads";
@@ -601,6 +602,14 @@ function getResultados(votacion_id: number) {
 // ════════════════════════════════════════════
 const app = new Hono();
 app.use("/*", cors());
+const checkRate = makeRateLimiter();
+function limitPublic(c: any, action: string, count: number, windowMs: number) {
+  // Usar encabezado del proxy; el límite es mitigación, no verificación de identidad.
+  const client = c.req.header('x-real-ip') ||
+    (c.req.header('x-forwarded-for') || '').split(',')[0].trim() || 'unknown';
+  return checkRate(action + ':' + client, count, windowMs);
+}
+
 app.onError((err, c) => {
   if (err instanceof UploadValidationError) return c.json({ ok: false, error: err.message }, err.status);
   console.error('Error interno de la API', err);
@@ -639,6 +648,9 @@ app.get("/uploads/*", async (c) => {
 //  AUTH
 // ════════════════════════════════════════════
 app.post("/api/auth/login", async (c) => {
+  if (!limitPublic(c, 'login', 15, 15 * 60_000)) {
+    return c.json({ ok: false, error: 'Demasiados intentos. Intentá más tarde.' }, 429);
+  }
   const { username, password } = await c.req.json();
   const user = db.query("SELECT * FROM usuarios WHERE username=?").get(username) as any;
   if (!user) return c.json({ ok: false, error: "Credenciales inválidas" }, 401);
@@ -695,7 +707,7 @@ app.post("/api/auth/change-password", requireAuth, async (c) => {
 // ════════════════════════════════════════════
 //  CONDÓMINOS
 // ════════════════════════════════════════════
-app.get("/api/condominios", (c) => {
+app.get("/api/condominios", requireAdmin, (c) => {
   const mes  = Number(c.req.query("mes")  ?? new Date().getMonth() + 1);
   const anio = Number(c.req.query("anio") ?? new Date().getFullYear());
   const condos = db.query("SELECT * FROM condominios WHERE activo=1 ORDER BY CASE WHEN CAST(unidad AS INTEGER) = 0 THEN 1 ELSE 0 END, CAST(unidad AS INTEGER), unidad").all() as any[];
@@ -717,7 +729,7 @@ app.get("/api/condominios", (c) => {
   return c.json(result);
 });
 
-app.get("/api/condominios/:id", (c) => {
+app.get("/api/condominios/:id", requireAdmin, (c) => {
   const co = db.query("SELECT * FROM condominios WHERE id=?").get(Number(c.req.param("id"))) as any;
   if (!co) return c.json({ error: "No encontrado" }, 404);
   const pagos = db.query("SELECT * FROM pagos WHERE condominio_id=? ORDER BY anio,mes").all(co.id);
@@ -1225,8 +1237,21 @@ app.delete("/api/gastos-ext/:id", requireAdmin, (c) => {
 
 // ── Presupuestos para gastos extraordinarios ──
 app.post("/api/gastos-ext/:id/presupuestos", async (c) => {
+  if (!limitPublic(c, 'presupuestos', 20, 60 * 60_000)) {
+    return c.json({ ok: false, error: 'Límite de envíos alcanzado.' }, 429);
+  }
   const gasto_ext_id = Number(c.req.param("id"));
+  const gasto = db.query("SELECT id FROM gastos_extraordinarios WHERE id=? AND estado='activo'").get(gasto_ext_id);
+  if (!gasto) return c.json({ ok: false, error: 'Gasto extraordinario no encontrado o inactivo.' }, 404);
   const b = await c.req.parseBody();
+  const monto = Number(b.monto);
+  if (!Number.isFinite(monto) || monto <= 0 || monto > 1_000_000_000 ||
+      typeof b.despacho !== 'string' || b.despacho.length > 40 ||
+      typeof b.empresa !== 'string' || !b.empresa.trim() || b.empresa.length > 200 ||
+      typeof b.nombre_presentante !== 'string' || !b.nombre_presentante.trim() || b.nombre_presentante.length > 200 ||
+      typeof b.firma !== 'string' || !b.firma.startsWith('data:image/png;base64,') || b.firma.length > 900_000) {
+    return c.json({ ok: false, error: 'Datos del presupuesto inválidos.' }, 400);
+  }
   // Solo 3 presupuestos por gasto
   const count = (db.query("SELECT COUNT(*) as c FROM presupuestos WHERE gasto_ext_id=?").get(gasto_ext_id) as any).c;
   if (count >= 3) return c.json({ error: "Máximo 3 presupuestos por gasto" }, 400);
@@ -1336,7 +1361,15 @@ app.get("/api/solicitudes", (c) =>
 
 // Crear solicitud con foto del problema
 app.post("/api/solicitudes", async (c) => {
+  if (!limitPublic(c, 'solicitud', 20, 60 * 60_000)) {
+    return c.json({ ok: false, error: 'Límite de solicitudes alcanzado.' }, 429);
+  }
   const b = await c.req.parseBody();
+  if (typeof b.descripcion !== 'string' || !b.descripcion.trim() || b.descripcion.length > 4000 ||
+      typeof b.autor !== 'string' && b.autor != null ||
+      String(b.autor || '').length > 120) {
+    return c.json({ ok: false, error: 'Solicitud inválida o demasiado larga.' }, 400);
+  }
   let foto_path: string | null = null;
   if (b.foto && typeof b.foto !== "string") {
     foto_path = await saveFile(b.foto, "solicitudes");
@@ -1621,7 +1654,14 @@ app.get("/api/mensajes", (c) =>
   c.json(db.query("SELECT * FROM mensajes ORDER BY created_at ASC LIMIT 100").all())
 );
 app.post("/api/mensajes", async (c) => {
+  if (!limitPublic(c, 'mensajes', 30, 60 * 60_000)) {
+    return c.json({ ok: false, error: 'Demasiados mensajes.' }, 429);
+  }
   const b = await c.req.json();
+  if (typeof b.de !== 'string' || !b.de.trim() || b.de.length > 120 ||
+      typeof b.texto !== 'string' || !b.texto.trim() || b.texto.length > 2000) {
+    return c.json({ ok: false, error: 'Mensaje inválido o demasiado largo.' }, 400);
+  }
   db.run("INSERT INTO mensajes (de,texto) VALUES (?,?)", [b.de, b.texto]);
   return c.json({ ok: true });
 });
@@ -1700,11 +1740,23 @@ app.put("/api/votaciones/:id/estado", requireAdmin, async (c) => {
 });
 
 app.post("/api/votaciones/:id/votar", async (c) => {
+  if (!limitPublic(c, 'votaciones', 40, 60 * 60_000)) {
+    return c.json({ ok: false, error: 'Demasiados intentos de votar.' }, 429);
+  }
   const { despacho, nombre_votante, firma, opcion } = await c.req.json();
-  if (!despacho||!nombre_votante||!firma||!opcion)
-    return c.json({ error: "Todos los campos son requeridos" }, 400);
+  if (typeof despacho !== 'string' || typeof nombre_votante !== 'string' ||
+      !nombre_votante.trim() || nombre_votante.length > 150 ||
+      typeof firma !== 'string' || !firma.startsWith('data:image/png;base64,') ||
+      firma.length > 900_000 || typeof opcion !== 'string') {
+    return c.json({ ok: false, error: 'Datos de votación inválidos.' }, 400);
+  }
   const v = db.query("SELECT * FROM votaciones WHERE id=?").get(Number(c.req.param("id"))) as any;
   if (!v) return c.json({ error: "Votación no encontrada" }, 404);
+  const activo = !!db.query("SELECT id FROM condominios WHERE unidad=? AND activo=1").get(despacho);
+  const habilitados = JSON.parse(v.despachos_habilitados || '[]');
+  if (!Array.isArray(habilitados) || !eligibleUnit(despacho, activo, habilitados)) {
+    return c.json({ ok: false, error: 'Despacho no habilitado para votar.' }, 403);
+  }
   if (v.estado !== "activa") return c.json({ error: "Esta votación ya está cerrada" }, 400);
   if (v.fecha_cierre && new Date() > new Date(v.fecha_cierre)) {
     db.run("UPDATE votaciones SET estado='cerrada' WHERE id=?", [v.id]);
