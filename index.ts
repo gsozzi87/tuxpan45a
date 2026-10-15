@@ -891,7 +891,7 @@ app.get("/api/pagos/resumen", (c) => {
   }
   let saldo_acumulado = 0;
   for (const {mes:m, anio:a} of allMeses) {
-    const recMes=(db.query("SELECT COALESCE(SUM(monto),0) t FROM pagos WHERE mes=? AND anio=? AND tipo_pago='ordinario'").get(m,a) as any).t;
+    const recMes=(db.query("SELECT COALESCE(SUM(monto),0) t FROM pagos WHERE mes=? AND anio=?").get(m,a) as any).t;
     const gMes   = (db.query("SELECT COALESCE(SUM(monto),0) as t FROM gastos WHERE mes=? AND anio=? AND COALESCE(es_recurrente,0)=0").get(m,a) as any)?.t ?? 0;
     const miMes  = (db.query("SELECT COALESCE(SUM(monto),0) as t FROM gastos_misc WHERE mes=? AND anio=?").get(m,a) as any)?.t ?? 0;
     const abMes  = (db.query("SELECT COALESCE(SUM(monto),0) as t FROM gastos_pagos WHERE mes=? AND anio=?").get(m,a) as any)?.t ?? 0;
@@ -1068,8 +1068,8 @@ app.get("/api/movimientos", (c) => {
 
   // ── Ingresos: cuotas ordinarias ──────────────────────────────
   const pagosQ = mes
-    ? "SELECT p.id, p.fecha_pago as fecha, p.monto, p.mes, p.anio, p.metodo_pago, p.referencia, p.notas, c.unidad, c.propietario, 'ingreso' as tipo, 'cuota' as categoria, 'pagos' as tabla FROM pagos p JOIN condominios c ON c.id=p.condominio_id WHERE p.anio=? AND p.mes=? ORDER BY p.fecha_pago, p.created_at"
-    : "SELECT p.id, p.fecha_pago as fecha, p.monto, p.mes, p.anio, p.metodo_pago, p.referencia, p.notas, c.unidad, c.propietario, 'ingreso' as tipo, 'cuota' as categoria, 'pagos' as tabla FROM pagos p JOIN condominios c ON c.id=p.condominio_id WHERE p.anio=? ORDER BY p.fecha_pago, p.created_at";
+    ? "SELECT p.id, p.fecha_pago as fecha, p.monto, p.mes, p.anio, p.metodo_pago, p.referencia, p.notas, c.unidad, c.propietario, 'ingreso' as tipo, CASE WHEN p.tipo_pago='extraordinario' THEN 'cuota_extra' ELSE 'cuota' END as categoria, 'pagos' as tabla FROM pagos p JOIN condominios c ON c.id=p.condominio_id WHERE p.anio=? AND p.mes=? ORDER BY p.fecha_pago, p.created_at"
+    : "SELECT p.id, p.fecha_pago as fecha, p.monto, p.mes, p.anio, p.metodo_pago, p.referencia, p.notas, c.unidad, c.propietario, 'ingreso' as tipo, CASE WHEN p.tipo_pago='extraordinario' THEN 'cuota_extra' ELSE 'cuota' END as categoria, 'pagos' as tabla FROM pagos p JOIN condominios c ON c.id=p.condominio_id WHERE p.anio=? ORDER BY p.fecha_pago, p.created_at";
   const pagos = mes
     ? db.query(pagosQ).all(anio, mes) as any[]
     : db.query(pagosQ).all(anio) as any[];
@@ -1098,8 +1098,14 @@ app.get("/api/movimientos", (c) => {
     ? db.query(abonosQ).all(anio, mes) as any[]
     : db.query(abonosQ).all(anio) as any[];
 
+  // Entradas extraordinarias de caja chica: no son gasto ni deuda.
+  const ajustesQ=mes
+    ? "SELECT id,printf('%04d-%02d-01',anio,mes) fecha,deposito_extra monto,mes,anio,NULL metodo_pago,NULL referencia,notas,NULL unidad,'Ajuste caja chica' propietario,'ingreso' tipo,'ajuste_caja' categoria,'caja_chica' tabla FROM caja_chica WHERE anio=? AND mes=? AND deposito_extra<>0"
+    : "SELECT id,printf('%04d-%02d-01',anio,mes) fecha,deposito_extra monto,mes,anio,NULL metodo_pago,NULL referencia,notas,NULL unidad,'Ajuste caja chica' propietario,'ingreso' tipo,'ajuste_caja' categoria,'caja_chica' tabla FROM caja_chica WHERE anio=? AND deposito_extra<>0";
+  const ajustes=mes?db.query(ajustesQ).all(anio,mes) as any[]:db.query(ajustesQ).all(anio) as any[];
+
   // Unir y ordenar por fecha, luego mes
-  const todos = [...pagos, ...gastos, ...misc, ...abonos].sort((a: any, b: any) => {
+  const todos = [...pagos, ...gastos, ...misc, ...abonos, ...ajustes].sort((a: any, b: any) => {
     const fa = a.fecha || `${a.anio}-${String(a.mes).padStart(2,'0')}-01`;
     const fb = b.fecha || `${b.anio}-${String(b.mes).padStart(2,'0')}-01`;
     return fa < fb ? -1 : fa > fb ? 1 : 0;
