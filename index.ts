@@ -386,19 +386,30 @@ async function seed() {
   const { password } = await import("bun");
 
   // ── Usuarios ──
+  // Ninguna credencial predeterminada debe permanecer en el repositorio.
+  // Esta configuración solo afecta a instalaciones nuevas; nunca sustituye
+  // las contraseñas de usuarios existentes del volumen persistente.
   const adminExists = db.query("SELECT id FROM usuarios WHERE username = ?").get("admin");
   if (!adminExists) {
-    const hash = await password.hash("edificio2026", "bcrypt");
-    db.run("INSERT INTO usuarios (username,password,nombre,rol) VALUES (?,?,?,?)",
-      ["admin", hash, "Ing. Gastón Sozzi", "admin"]);
-    console.log("✓ Admin creado: admin / edificio2026");
+    const initial = process.env.INITIAL_ADMIN_PASSWORD;
+    if (initial && initial.length >= 12) {
+      const hash = await password.hash(initial, "bcrypt");
+      db.run("INSERT INTO usuarios (username,password,nombre,rol) VALUES (?,?,?,?)",
+        ["admin", hash, "Administración TUXPAN 45A", "admin"]);
+      console.log("✓ Usuario administrador inicial creado");
+    } else {
+      console.warn("⚠ Para habilitar un administrador nuevo, configurar INITIAL_ADMIN_PASSWORD (mínimo 12 caracteres)");
+    }
   }
-  const sergiExists = db.query("SELECT id FROM usuarios WHERE username = ?").get("sergio");
-  if (!sergiExists) {
-    const hash = await password.hash("mantenimiento2026", "bcrypt");
-    db.run("INSERT INTO usuarios (username,password,nombre,rol) VALUES (?,?,?,?)",
-      ["sergio", hash, "Sergio Guerrero", "mantenimiento"]);
-    console.log("✓ Mantenimiento creado: sergio / mantenimiento2026");
+  const mantoExists = db.query("SELECT id FROM usuarios WHERE username = ?").get("sergio");
+  if (!mantoExists) {
+    const initial = process.env.INITIAL_MAINTENANCE_PASSWORD;
+    if (initial && initial.length >= 12) {
+      const hash = await password.hash(initial, "bcrypt");
+      db.run("INSERT INTO usuarios (username,password,nombre,rol) VALUES (?,?,?,?)",
+        ["sergio", hash, "Mantenimiento", "mantenimiento"]);
+      console.log("✓ Usuario de mantenimiento inicial creado");
+    }
   }
 
   // ── Condóminos con cuotas reales ──
@@ -625,6 +636,30 @@ app.get("/api/auth/me", (c) => {
   const sess = getSession(c);
   if (!sess) return c.json({ ok: false }, 401);
   return c.json({ ok: true, ...sess });
+});
+
+// Cambio de contraseña autenticado con verificación de la clave anterior.
+// Revoca todas las sesiones del usuario tras un cambio correcto.
+app.post("/api/auth/change-password", requireAuth, async (c) => {
+  const sess = (c as any).session;
+  const b = await c.req.json().catch(() => ({}));
+  if (typeof b.current_password !== "string" || typeof b.new_password !== "string" ||
+      b.new_password.length < 12 || b.new_password.length > 128) {
+    return c.json({ ok: false, error: "La contraseña nueva debe tener entre 12 y 128 caracteres." }, 400);
+  }
+  const user = db.query("SELECT password FROM usuarios WHERE id=?").get(sess.userId) as any;
+  if (!user) return c.json({ ok: false, error: "Usuario no encontrado" }, 404);
+  const { password: bunPass } = await import("bun");
+  if (!(await bunPass.verify(b.current_password, user.password))) {
+    return c.json({ ok: false, error: "Contraseña actual incorrecta" }, 403);
+  }
+  const hash = await bunPass.hash(b.new_password, "bcrypt");
+  db.run("UPDATE usuarios SET password=? WHERE id=?", [hash, sess.userId]);
+  for (const [token, session] of sessions) {
+    if (session.userId === sess.userId) sessions.delete(token);
+  }
+  deleteCookie(c, "sid");
+  return c.json({ ok: true });
 });
 
 // ════════════════════════════════════════════
@@ -1912,6 +1947,7 @@ html{color-scheme:light}
     </div>
     <div id='session-bar' style='display:none;align-items:center;gap:10px'>
       <span class='badge bo' id='session-badge'>🔐 Admin</span>
+      <button class='btn btn-o btn-sm' onclick='openModal("modal-password")'>🔑 Contraseña</button>
       <button class='btn btn-o btn-sm' onclick='doLogout()'>Cerrar sesión</button>
     </div>
   </header>
@@ -2126,6 +2162,16 @@ html{color-scheme:light}
   <div class='form-g'><label class='form-l'>Contraseña</label><input class='fi' id='ap' type='password' onkeydown='if(event.key==="Enter")doLogin()'></div>
   <div style='display:flex;gap:9px'><button class='btn btn-g' onclick='doLogin()'>Ingresar</button><button class='btn btn-o' onclick='closeModal("modal-login")'>Cancelar</button></div>
   <div id='login-err' style='color:var(--red);font-size:12px;margin-top:9px;display:none'>Usuario o contraseña incorrectos.</div>
+</div></div>
+
+<!-- Cambiar contraseña: disponible para roles autenticados -->
+<div class='modal-ov' id='modal-password' onclick='closeOv(event,"modal-password")'><div class='modal'>
+  <div class='modal-title'>🔑 Cambiar contraseña</div>
+  <div class='form-g'><label class='form-l' for='clave-actual'>Contraseña actual</label><input class='fi' id='clave-actual' type='password' autocomplete='current-password'></div>
+  <div class='form-g'><label class='form-l' for='clave-nueva'>Nueva contraseña (mínimo 12 caracteres)</label><input class='fi' id='clave-nueva' type='password' minlength='12' autocomplete='new-password'></div>
+  <div class='form-g'><label class='form-l' for='clave-repetida'>Repetir nueva contraseña</label><input class='fi' id='clave-repetida' type='password' minlength='12' autocomplete='new-password'></div>
+  <div style='display:flex;gap:9px;flex-wrap:wrap'><button class='btn btn-g' onclick='cambiarPassword()'>Guardar contraseña</button><button class='btn btn-o' onclick='closeModal("modal-password")'>Cancelar</button></div>
+  <div id='clave-error' role='alert' style='color:var(--red);font-size:12px;margin-top:9px;display:none'></div>
 </div></div>
 
 <!-- Registrar pago -->
