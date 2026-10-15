@@ -115,6 +115,38 @@ async function doLogout() {
   showToast('Sesión cerrada');
 }
 
+async function cambiarPassword() {
+  const actual = $id('clave-actual').value;
+  const nueva = $id('clave-nueva').value;
+  const repetida = $id('clave-repetida').value;
+  const error = $id('clave-error');
+  error.style.display = 'none';
+  if (nueva.length < 12 || nueva.length > 128 || nueva !== repetida) {
+    error.textContent = 'La nueva contraseña debe tener al menos 12 caracteres y coincidir en ambos campos.';
+    error.style.display = 'block';
+    return;
+  }
+  try {
+    const r = await api('/api/auth/change-password', {
+      method: 'POST',
+      body: JSON.stringify({ current_password: actual, new_password: nueva })
+    });
+    if (!r.ok) {
+      error.textContent = r.error || 'No fue posible cambiar la contraseña.';
+      error.style.display = 'block';
+      return;
+    }
+    ['clave-actual', 'clave-nueva', 'clave-repetida'].forEach(id => $id(id).value = '');
+    closeModal('modal-password');
+    sesion = null;
+    aplicarSesion();
+    showToast('✓ Contraseña actualizada. Ingresá nuevamente.');
+  } catch {
+    error.textContent = 'Error de comunicación. Volvé a intentar.';
+    error.style.display = 'block';
+  }
+}
+
 function aplicarSesion() {
   const isAdmin = sesion?.rol === 'admin';
   const isManto = sesion?.rol === 'mantenimiento' || isAdmin;
