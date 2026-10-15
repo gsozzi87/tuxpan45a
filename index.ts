@@ -19,6 +19,7 @@ import { makeRateLimiter, eligibleUnit } from "./request-policy";
 import { parsePaymentInput, PaymentValidationError } from "./payment-policy";
 import { mexicoPeriod, estadoCuentaWindow } from "./date-period";
 import { objetivoMensual, estadoPago } from "./monthly-expenses";
+import { rangoMeses, crearDistribucion, centavos } from "./monthly-ledger";
 
 // ── Directorios persistentes ──
 const UPLOAD_DIR = process.env.UPLOAD_DIR ?? "./uploads";
@@ -87,6 +88,49 @@ db.run(`CREATE TABLE IF NOT EXISTS pagos (
 )`);
 
 // Historial independiente para conservar auditoría aun después de borrar pagos.
+// La cuota de cada unidad tiene vigencia mensual; cambiarla no reescribe adeudos anteriores.
+db.run(`CREATE TABLE IF NOT EXISTS cuotas_historial (
+  condominio_id INTEGER NOT NULL,
+  desde_anio INTEGER NOT NULL,
+  desde_mes INTEGER NOT NULL CHECK(desde_mes BETWEEN 1 AND 12),
+  monto REAL NOT NULL CHECK(monto>=0),
+  PRIMARY KEY(condominio_id,desde_anio,desde_mes),
+  FOREIGN KEY(condominio_id) REFERENCES condominios(id)
+)`);
+
+// Un pago físico único puede acreditar varios meses sin generar ingresos repetidos.
+db.run(`CREATE TABLE IF NOT EXISTS pagos_multiples (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  condominio_id INTEGER NOT NULL,
+  monto REAL NOT NULL CHECK(monto>0),
+  fecha_pago DATE NOT NULL,
+  metodo_pago TEXT,
+  referencia TEXT,
+  numero_recibo TEXT,
+  notas TEXT,
+  comprobante_path TEXT,
+  registrado_por INTEGER,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY(condominio_id) REFERENCES condominios(id)
+)`);
+db.run(`CREATE TABLE IF NOT EXISTS pagos_aplicaciones (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  origen TEXT NOT NULL CHECK(origen IN ('pago','multiple')),
+  origen_id INTEGER NOT NULL,
+  condominio_id INTEGER NOT NULL,
+  mes INTEGER NOT NULL CHECK(mes BETWEEN 1 AND 12),
+  anio INTEGER NOT NULL,
+  monto REAL NOT NULL CHECK(monto>0),
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(origen,origen_id,mes,anio),
+  FOREIGN KEY(condominio_id) REFERENCES condominios(id)
+)`);
+db.run("CREATE INDEX IF NOT EXISTS idx_aplicaciones_unidad_mes ON pagos_aplicaciones(condominio_id,anio,mes)");
+db.run(`CREATE TABLE IF NOT EXISTS ajustes_migraciones (
+  clave TEXT PRIMARY KEY,
+  creado DATETIME DEFAULT CURRENT_TIMESTAMP
+)`);
+
 db.run(`CREATE TABLE IF NOT EXISTS pagos_historial (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   pago_id INTEGER,
@@ -488,6 +532,43 @@ async function seed() {
       console.warn("⚠ Unidad 201 desactivada: conserva historial; pagos=%d votos=%d presupuestos=%d solicitudes=%d",pagos,votos,presupuestos,solicitudes);
     }
   }
+
+
+  // Dos correcciones acotadas a 2026, transaccionales e idempotentes.
+  // Jamás agregar ingresos ficticios ni modificar el monto/fecha del cobro original.
+  db.transaction(() => {
+    const v = db.query("SELECT id,cuota_mensual FROM condominios WHERE unidad='102'").get() as any;
+    if (v && (v.cuota_mensual===2000 || v.cuota_mensual===1900)) {
+      const r = db.run("INSERT OR IGNORE INTO ajustes_migraciones(clave) VALUES ('cuota_102_ago_2026')");
+      if (r.changes) {
+        db.run("INSERT OR IGNORE INTO cuotas_historial(condominio_id,desde_anio,desde_mes,monto) VALUES (?,?,?,?)",[v.id,2026,3,2000]);
+        db.run("INSERT OR REPLACE INTO cuotas_historial(condominio_id,desde_anio,desde_mes,monto) VALUES (?,?,?,?)",[v.id,2026,8,1900]);
+        db.run("UPDATE condominios SET cuota_mensual=1900 WHERE id=?",[v.id]);
+        console.log("✓ Cuota histórica unidad 102: $2000 marzo-julio; $1900 desde agosto");
+      }
+    }
+    const co = db.query("SELECT id,cuota_mensual FROM condominios WHERE unidad='401'").get() as any;
+    if (co?.cuota_mensual===1750) {
+      const pagos = db.query("SELECT id,monto,fecha_pago,mes FROM pagos WHERE condominio_id=? AND anio=2026 AND tipo_pago='ordinario' AND monto=14000").all(co.id) as any[];
+      const p = pagos.length===1 ? pagos[0] : null;
+      if(p && p.mes===5 && !(db.query("SELECT 1 FROM ajustes_migraciones WHERE clave='diana_2026_14000'").get())) {
+        const otras = db.query("SELECT mes,monto FROM pagos WHERE condominio_id=? AND anio=2026 AND tipo_pago='ordinario' AND mes BETWEEN 5 AND 12 AND id<>? AND monto>0").all(co.id,p.id) as any[];
+        const asignadas = (db.query("SELECT COUNT(*) n FROM pagos_aplicaciones WHERE condominio_id=? AND anio=2026 AND mes BETWEEN 5 AND 12").get(co.id) as any).n;
+        if(!otras.length && !asignadas) {
+          for(let mes=5;mes<=12;mes++){
+            db.run("INSERT INTO pagos_aplicaciones(origen,origen_id,condominio_id,mes,anio,monto) VALUES ('pago',?,?,?,?,?)",
+              [p.id,co.id,mes,2026,1750]);
+          }
+          db.run("INSERT INTO ajustes_migraciones(clave) VALUES ('diana_2026_14000')");
+          db.run("INSERT INTO pagos_historial(pago_id,condominio_id,mes,anio,tipo_pago,accion,antes_json,despues_json) VALUES (?,?,?,?,?,?,?,?)",
+            [p.id,co.id,p.mes,2026,'ordinario','asignacion_mayo_diciembre',
+              JSON.stringify({monto:p.monto,fecha_pago:p.fecha_pago}),
+              JSON.stringify({aplicaciones:[5,6,7,8,9,10,11,12].map(mes=>({mes,anio:2026,monto:1750}))})]);
+          console.log("✓ Pago único de $14000 de unidad 401 aplicado a mayo-diciembre 2026; fecha original preservada");
+        } else console.warn("⚠ Pago unidad 401 pendiente de distribuir: hay otros abonos o aplicaciones; no se modificó");
+      }
+    }
+  })();
 
   // ── Gastos plantilla (recurrentes por defecto) ──
   const { c: gpc } = db.query("SELECT COUNT(*) as c FROM gastos_plantilla").get() as any;
