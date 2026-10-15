@@ -501,10 +501,12 @@ async function borrarPago(id, propietario, mes) {
 // ── LIBRO DE CAJA ────────────────────────
 const CATICONS2 = { seguridad:'🔒', elevador:'🛗', servicios:'💡', mantenimiento:'🔧', misc:'📦', otro:'📦' };
 
+let _cajaMovimientos=[];
 async function loadCaja() {
   const mes  = $id('caja-mes')?.value  || '';
   const anio = $id('caja-anio')?.value || String(anioActual());
   const data = await api(`/api/movimientos?anio=${anio}${mes ? '&mes='+mes : ''}`);
+  _cajaMovimientos=Array.isArray(data.movimientos)?data.movimientos:[];
 
   // ── Stats ──
   const balColor = data.saldo_final >= 0 ? 'var(--green)' : 'var(--red)';
@@ -532,7 +534,7 @@ async function loadCaja() {
   }
 
   const isAdmin = sesion?.rol === 'admin';
-  const catLabel = { cuota:'Cuota condómino', seguridad:'Seguridad', elevador:'Elevador', servicios:'Servicios', mantenimiento:'Mantenimiento', misc:'Misceláneo', otro:'Otro' };
+  const catLabel = { cuota:'Cuota condómino',cuota_extra:'Cuota extraordinaria',ajuste_caja:'Ajuste caja chica', seguridad:'Seguridad', elevador:'Elevador', servicios:'Servicios', mantenimiento:'Mantenimiento', misc:'Misceláneo', otro:'Otro' };
 
   $id('caja-tabla').innerHTML = `
     <table style="width:100%;border-collapse:collapse;font-size:13px">
@@ -550,15 +552,13 @@ async function loadCaja() {
         ${data.movimientos.map((m, i) => {
           const esIngreso = m.tipo === 'ingreso';
           const fecha     = m.fecha ? m.fecha.slice(0,10) : `${m.anio}-${String(m.mes).padStart(2,'0')}-01`;
-          const concepto  = esIngreso
-            ? `<strong>${m.unidad}</strong> — ${m.propietario}`
-            : `${CATICONS2[m.categoria]||'📦'} ${catLabel[m.categoria]||m.categoria}${m.propietario ? ' · '+m.propietario : ''}`;
-          const nota      = m.notas ? `<div style="font-size:11px;color:var(--text3);margin-top:2px">${m.notas}</div>` : '';
+          const concepto= m.categoria==='ajuste_caja' ? '🏦 Ajuste caja chica'
+            : esIngreso ? `<strong>${escapeHtml(m.unidad)}</strong> — ${escapeHtml(m.propietario)} ${m.categoria==='cuota_extra'?'· Extraordinaria':''}`
+            : `${CATICONS2[m.categoria]||'📦'} ${escapeHtml(catLabel[m.categoria]||m.categoria)}${m.propietario?' · '+escapeHtml(m.propietario):''}`;
+          const nota=m.notas?`<div style="font-size:11px;color:var(--text3);margin-top:2px">${escapeHtml(m.notas)}</div>`:'';
           const saldoColor = m.saldo_acumulado >= 0 ? 'var(--text)' : 'var(--red)';
           const rowBg = i % 2 === 0 ? '' : 'background:var(--bg2)';
-          const delBtn = isAdmin
-            ? `<td style="padding:8px 14px;text-align:center"><button class="btn btn-r btn-sm" style="font-size:11px;padding:3px 7px" onclick="borrarMovimiento('${m.tabla}',${m.id},'${concepto.replace(/'/g,"\'").replace(/<[^>]+>/g,'')}')">✕</button></td>`
-            : '';
+          const delBtn=isAdmin?`<td style="padding:8px 14px;text-align:center">${m.tabla==='caja_chica'?'':`<button class="btn btn-r btn-sm" style="font-size:11px;padding:3px 7px" onclick="borrarMovimientoFila(${i})">✕</button>`}</td>`:'';
           return `
             <tr style="border-bottom:1px solid var(--border);${rowBg}">
               <td style="padding:10px 14px;white-space:nowrap;color:var(--text3);font-size:12px;font-family:'DM Sans',sans-serif;font-variant-numeric:tabular-nums">${fecha}</td>
@@ -573,6 +573,12 @@ async function loadCaja() {
     </table>`;
 }
 
+async function borrarMovimientoFila(index) {
+ const m=_cajaMovimientos[index];
+ if(!m||m.tabla==='caja_chica')return;
+ const nombre=m.unidad||m.propietario||m.categoria||'movimiento';
+ await borrarMovimiento(m.tabla,m.id,String(nombre));
+}
 async function borrarMovimiento(tabla, id, concepto) {
   if (!confirm(`¿Eliminar el movimiento:\n"${concepto}"?\n\nEsta acción actualizará el saldo y no se puede deshacer.`)) return;
   const endpoints = {
