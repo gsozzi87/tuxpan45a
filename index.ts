@@ -1260,6 +1260,21 @@ app.post("/api/pagos", requireAdmin, async (c) => {
   }
 });
 
+app.delete("/api/pagos/multiples/:id",requireAdmin,c=>{
+  const id=Number(c.req.param('id'));
+  const pago=db.query("SELECT * FROM pagos_multiples WHERE id=?").get(id) as any;
+  if(!pago)return c.json({ok:false,error:'Pago no encontrado'},404);
+  db.transaction(()=>{
+    const antes=db.query("SELECT mes,anio,monto FROM pagos_aplicaciones WHERE origen='multiple' AND origen_id=?").all(id);
+    db.run("INSERT INTO pagos_historial(pago_id,condominio_id,mes,anio,tipo_pago,accion,antes_json,registrado_por) VALUES(?,?,?,?,?,?,?,?)",
+      [id,pago.condominio_id,Number(pago.fecha_pago.slice(5,7)),Number(pago.fecha_pago.slice(0,4)),
+        'multiple','eliminacion_pago_multiple',JSON.stringify({pago,aplicaciones:antes}),(c as any).session.userId]);
+    db.run("DELETE FROM pagos_aplicaciones WHERE origen='multiple' AND origen_id=?",[id]);
+    db.run("DELETE FROM pagos_multiples WHERE id=?",[id]);
+  })();
+  return c.json({ok:true});
+});
+
 app.delete("/api/pagos/:id", requireAdmin, (c) => {
   const id = Number(c.req.param("id"));
   const prev = db.query("SELECT * FROM pagos WHERE id=?").get(id) as any;
@@ -1295,6 +1310,22 @@ app.get("/api/movimientos", (c) => {
     ? db.query(pagosQ).all(anio, mes) as any[]
     : db.query(pagosQ).all(anio) as any[];
 
+  // Pago único repartido entre varios meses: una sola entrada contable.
+  const multiples=mes
+    ? db.query(`SELECT pm.id,pm.fecha_pago fecha,pm.monto,
+        CAST(substr(pm.fecha_pago,6,2) AS INTEGER) mes,CAST(substr(pm.fecha_pago,1,4) AS INTEGER) anio,
+        pm.metodo_pago,pm.referencia,pm.notas,co.unidad,co.propietario,
+        'ingreso' tipo,'cuota_multiple' categoria,'pagos_multiples' tabla
+        FROM pagos_multiples pm JOIN condominios co ON co.id=pm.condominio_id
+        WHERE substr(pm.fecha_pago,1,7)=? ORDER BY pm.fecha_pago`)
+      .all(`${anio}-${String(mes).padStart(2,'0')}`) as any[]
+    : db.query(`SELECT pm.id,pm.fecha_pago fecha,pm.monto,
+        CAST(substr(pm.fecha_pago,6,2) AS INTEGER) mes,CAST(substr(pm.fecha_pago,1,4) AS INTEGER) anio,
+        pm.metodo_pago,pm.referencia,pm.notas,co.unidad,co.propietario,
+        'ingreso' tipo,'cuota_multiple' categoria,'pagos_multiples' tabla
+        FROM pagos_multiples pm JOIN condominios co ON co.id=pm.condominio_id
+        WHERE substr(pm.fecha_pago,1,4)=? ORDER BY pm.fecha_pago`).all(String(anio)) as any[];
+
   // ── Egresos: gastos ordinarios ────────────────────────────────
   const gastosQ = mes
     ? "SELECT id, fecha, monto, mes, anio, NULL as metodo_pago, NULL as referencia, notas, NULL as unidad, proveedor as propietario, 'egreso' as tipo, categoria, 'gastos' as tabla FROM gastos WHERE anio=? AND mes=? AND COALESCE(es_recurrente,0)=0 ORDER BY fecha, created_at"
@@ -1326,7 +1357,7 @@ app.get("/api/movimientos", (c) => {
   const ajustes=mes?db.query(ajustesQ).all(anio,mes) as any[]:db.query(ajustesQ).all(anio) as any[];
 
   // Unir y ordenar por fecha, luego mes
-  const todos = [...pagos, ...gastos, ...misc, ...abonos, ...ajustes].sort((a: any, b: any) => {
+  const todos = [...pagos, ...multiples, ...gastos, ...misc, ...abonos, ...ajustes].sort((a: any, b: any) => {
     const fa = a.fecha || `${a.anio}-${String(a.mes).padStart(2,'0')}-01`;
     const fb = b.fecha || `${b.anio}-${String(b.mes).padStart(2,'0')}-01`;
     return fa < fb ? -1 : fa > fb ? 1 : 0;
